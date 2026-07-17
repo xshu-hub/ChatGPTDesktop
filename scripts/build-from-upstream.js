@@ -116,12 +116,15 @@ function buildMac(platform) {
   const variant = platform === "mac-arm64" ? "arm64" : "x64";
   const extractDir = path.join(tempDir, `${variant}-extract`);
 
-  // Find Codex.app
+  // Find .app bundle via Info.plist (upstream may rename from Codex.app to ChatGPT.app)
   let appPath = null;
   if (fs.existsSync(extractDir)) {
     const findApp = (dir) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (e.name === "Codex.app" && e.isDirectory()) return path.join(dir, e.name);
+        if (e.isDirectory() && e.name.endsWith('.app')) {
+          const plist = path.join(dir, e.name, 'Contents', 'Info.plist');
+          if (fs.existsSync(plist)) return path.join(dir, e.name);
+        }
         if (e.isDirectory()) { const r = findApp(path.join(dir, e.name)); if (r) return r; }
       }
       return null;
@@ -130,11 +133,11 @@ function buildMac(platform) {
   }
 
   if (!appPath) {
-    console.error(`[x] Codex.app not found in cache. Run sync-upstream first.`);
+    console.error(`[x] .app bundle not found in cache. Run sync-upstream first.`);
     process.exit(1);
   }
 
-  console.log(`   [source] ${appPath}`);
+  console.log(`   [source] ${appPath} (${path.basename(appPath)})`);
 
   // 2. Copy .app to output (ditto preserves symlinks + resource forks)
   const outAppDir = path.join(OUT_DIR, platform);

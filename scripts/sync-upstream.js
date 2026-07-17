@@ -80,6 +80,22 @@ function extractArchive(archive, dest) {
         if (fs.readdirSync(dest).length > 0) return;
       }
     }
+    // Fallback: use Python3 zipfile (available in most environments)
+    try {
+      execSync(`python3 -c "
+import zipfile, sys
+z = zipfile.ZipFile(sys.argv[1])
+z.extractall(sys.argv[2])
+print(f'Extracted {len(z.namelist())} files')
+" "${archive}" "${dest}"`, { stdio: "pipe" });
+      return;
+    } catch (e) {
+      // Fallback: use unzip if available
+      try {
+        execSync(`unzip -o "${archive}" -d "${dest}"`, { stdio: "pipe" });
+        return;
+      } catch {}
+    }
     throw new Error(`Failed to extract ${archive}`);
   }
 }
@@ -145,7 +161,19 @@ async function getWindowsVersion() {
   if (!info.categoryId) throw new Error("No CategoryID");
   const pkgs = await msstore.getFileList(cookie, info.categoryId, "Retail");
   if (pkgs.length === 0) throw new Error("No packages");
-  const pkg = pkgs[0];
+
+  // Filter for x64 packages only. MS Store may return arm64 packages first.
+  const x64Pkgs = pkgs.filter(p => p.name.includes("_x64__"));
+  if (x64Pkgs.length === 0) {
+    console.error("   [!] No x64 package found among:", pkgs.map(p => p.name).join(", "));
+    throw new Error("No x64 Windows package available");
+  }
+  if (x64Pkgs.length < pkgs.length) {
+    console.log(`   [filter] Selected x64 from ${pkgs.length} packages (skipped ${pkgs.length - x64Pkgs.length} non-x64)`);
+  }
+
+  const pkg = x64Pkgs[0];
+  console.log(`   [selected] ${pkg.name} (${(Number(pkg.size) / 1048576).toFixed(1)} MB)`);
   const url = await msstore.getDownloadUrl(pkg.updateID, pkg.revisionNumber, "Retail", pkg.digest);
   const verMatch = pkg.name.match(/_(\d+\.\d+\.\d+(?:\.\d+)?)_/);
   return { version: verMatch?.[1] || "unknown", url, packageName: pkg.name };
@@ -163,6 +191,10 @@ async function syncMac(variant, appcastUrl, destDir) {
   const zipPath = path.join(TEMP_DIR, `Codex-${variant}-${info.version}.zip`);
   const extractDir = path.join(TEMP_DIR, `${variant}-extract`);
 
+  if (FORCE && fs.existsSync(zipPath)) {
+    console.log(`   [force] Removing cached ${zipPath}`);
+    fs.unlinkSync(zipPath);
+  }
   if (!fs.existsSync(zipPath)) {
     curlDownload(info.url, zipPath, label);
   } else {
@@ -191,6 +223,10 @@ async function syncWin(destDir) {
   const msixPath = path.join(TEMP_DIR, info.packageName || `codex-win-${info.version}.msix`);
   const extractDir = path.join(TEMP_DIR, "win-extract");
 
+  if (FORCE && fs.existsSync(msixPath)) {
+    console.log(`   [force] Removing cached ${msixPath}`);
+    fs.unlinkSync(msixPath);
+  }
   if (!fs.existsSync(msixPath)) {
     curlDownload(info.url, msixPath, "Windows MSIX");
   } else {

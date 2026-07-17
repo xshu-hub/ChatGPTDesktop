@@ -12,8 +12,9 @@
  * Requires @cometix/codex CLI with thread/delete support.
  */
 const fs = require("fs");
+const path = require("path");
 const acorn = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
 
 // ─── Layer 1: app-main route injection ──────────────────────────
 
@@ -29,10 +30,12 @@ function patchAppMain(bundles) {
 
     // Dynamically find the unarchive-conversation route and extract:
     //   1. The quote style (" or `)
-    //   2. The wrapper function name (XE, YE, etc.)
-    //   3. The inner parameter variable name (t for conversationId)
-    // Pattern: <quote>unarchive-conversation<quote>:<WrapperFn>(async(e,{conversationId:<var>})=>{await e.unarchiveConversation(<var>)})
-    const routeRe = /(["`])unarchive-conversation\1:(\w+)\(async\((\w+),\{conversationId:(\w+)\}\)=>\{\s*await \3\.unarchiveConversation\(\4\)\s*\}\)/;
+    //   2. The wrapper function name (i9, XE, YE, etc.)
+    //   3. The manager variable name (e for app server manager)
+    //   4. The conversationId param variable name (t, etc.)
+    // Old pattern: "unarchive-conversation":XE(async(e,{conversationId:t})=>{await e.unarchiveConversation(t)})
+    // New pattern: "unarchive-conversation":i9(async(e,{conversationId:t,restorePinnedPosition:n})=>{await e.unarchiveConversation(t,n)})
+    const routeRe = /(["`])unarchive-conversation\1:(\w+)\(async\((\w+),\{conversationId:(\w+)[^}]*\}\)=>\{\s*await \3\.unarchiveConversation\(\4[^)]*\)\s*\}\)/;
     const routeMatch = code.match(routeRe);
     if (!routeMatch) {
       console.log(`  [!] ${relPath(bundle.path)}: unarchive-conversation route not found`);
@@ -266,21 +269,77 @@ function patchDataControls(bundles) {
   return patched;
 }
 
+// ─── Check-only variants (read-only) ─────────────────────────────
+
+function patchAppMainCheck(bundles) {
+  const routeRe = /(["`])unarchive-conversation\1:(\w+)\(async\((\w+),\{conversationId:(\w+)[^}]*\}\)=>\{\s*await \3\.unarchiveConversation\(\4[^)]*\)\s*\}\)/;
+  for (const bundle of bundles) {
+    const code = fs.readFileSync(bundle.path, "utf-8");
+    if (code.includes("delete-conversation")) {
+      console.log(`    [ALREADY_PATCHED] ${relPath(bundle.path)}: route already exists`);
+      continue;
+    }
+    const routeMatch = code.match(routeRe);
+    if (!routeMatch) {
+      console.log(`    [ABSENT] ${relPath(bundle.path)}: unarchive-conversation route pattern not found`);
+      continue;
+    }
+    console.log(`    [PATCHABLE] ${relPath(bundle.path)}: can inject delete-conversation route (wrapper=${routeMatch[2]})`);
+  }
+}
+
+function patchDataControlsCheck(bundles) {
+  for (const bundle of bundles) {
+    const code = fs.readFileSync(bundle.path, "utf-8");
+    if (code.includes("delete-conversation")) {
+      console.log(`    [ALREADY_PATCHED] ${relPath(bundle.path)}: delete button already exists`);
+      continue;
+    }
+    // Quick check: does the bundle contain the ROW_CLASS and an unarchive button pattern?
+    if (!code.includes("unarchive-conversation")) {
+      console.log(`    [ABSENT] ${relPath(bundle.path)}: no unarchive-conversation references found`);
+      continue;
+    }
+    console.log(`    [PATCHABLE] ${relPath(bundle.path)}: contains unarchive-conversation, can inject delete button`);
+  }
+}
+
 // ─── Main ───────────────────────────────────────────────────────
 
 function main() {
   const args = process.argv.slice(2);
+  const isCheck = args.includes("--check");
   const platform = args.find((a) =>
     ["mac-arm64", "mac-x64", "win"].includes(a),
   );
 
-  console.log("  [layer 1] app-main: delete-conversation route");
-  const appMainBundles = locateBundles({
-    dir: "assets",
-    pattern: /^app-main-.*\.js$/,
-    ...(platform ? { platform } : {}),
-  });
-  const routePatched = patchAppMain(appMainBundles);
+  console.log("  [layer 1] message-router: delete-conversation route");
+  // The route definitions moved from app-main-*.js to shared chunks in newer upstream.
+  // Search all webview/assets JS files for the unarchive-conversation route pattern.
+  const routeRe = /(["`])unarchive-conversation\1:(\w+)\(async\((\w+),\{conversationId:(\w+)[^}]*\}\)=>\{\s*await \3\.unarchiveConversation\(\4[^)]*\)\s*\}\)/;
+  const routerBundles = [];
+  const platforms = platform
+    ? [platform]
+    : ["mac-arm64", "mac-x64", "win"].filter(p => fs.existsSync(path.join(SRC_DIR, p, "_asar", "webview", "assets")));
+  for (const plat of platforms) {
+    const assetsDir = path.join(SRC_DIR, plat, "_asar", "webview", "assets");
+    if (!fs.existsSync(assetsDir)) continue;
+    for (const f of fs.readdirSync(assetsDir)) {
+      if (!f.endsWith(".js")) continue;
+      const fp = path.join(assetsDir, f);
+      try {
+        const code = fs.readFileSync(fp, "utf-8");
+        if (code.includes("unarchive-conversation") && routeRe.test(code)) {
+          routerBundles.push({ platform: plat, path: fp });
+        }
+      } catch {}
+    }
+  }
+  if (routerBundles.length === 0) {
+    console.log("    [ABSENT] No bundle contains unarchive-conversation route definition");
+  } else {
+    const routePatched = isCheck ? patchAppMainCheck(routerBundles) : patchAppMain(routerBundles);
+  }
 
   console.log("  [layer 2] data-controls: delete button");
   const dataControlsBundles = locateBundles({
@@ -288,9 +347,11 @@ function main() {
     pattern: /^data-controls-.*\.js$/,
     ...(platform ? { platform } : {}),
   });
-  const btnPatched = patchDataControls(dataControlsBundles);
-
-  console.log(`  [done] routes: ${routePatched}, buttons: ${btnPatched}`);
+  if (dataControlsBundles.length === 0) {
+    console.log("    [ABSENT] No data-controls bundle found");
+  } else {
+    const btnPatched = isCheck ? patchDataControlsCheck(dataControlsBundles) : patchDataControls(dataControlsBundles);
+  }
 }
 
 main();

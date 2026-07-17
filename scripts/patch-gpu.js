@@ -57,12 +57,13 @@ function verifyElectronBootstrap(code) {
 
 function main() {
   const args = process.argv.slice(2);
+  const isCheck = args.includes("--check");
   const platform = args.find((a) =>
     ["mac-arm64", "mac-x64", "win"].includes(a),
   );
 
   if (platform && platform !== "mac-x64") {
-    console.log("  [skip] GPU patch only applies to mac-x64");
+    console.log("  [SKIP] GPU patch only applies to mac-x64");
     return;
   }
 
@@ -73,7 +74,7 @@ function main() {
   });
 
   if (bundles.length === 0) {
-    console.log("  [skip] mac-x64 bootstrap.js not found");
+    console.log("  [ABSENT] mac-x64 bootstrap.js not found");
     return;
   }
 
@@ -82,25 +83,31 @@ function main() {
     const code = fs.readFileSync(bundle.path, "utf-8");
 
     if (code.includes(SWITCH_NAME)) {
-      console.log(`  [ok] ${relPath(bundle.path)}: already patched`);
+      console.log(`  [ALREADY_PATCHED] ${relPath(bundle.path)}: ${SWITCH_NAME} already injected`);
       continue;
     }
 
     if (!verifyElectronBootstrap(code)) {
-      console.log(
-        `  [!] ${relPath(bundle.path)}: not an electron bootstrap, skipping`,
-      );
+      console.log(`  [ABSENT] ${relPath(bundle.path)}: not an electron bootstrap, cannot patch`);
+      continue;
+    }
+
+    if (isCheck) {
+      console.log(`  [PATCHABLE] ${relPath(bundle.path)}: will inject ${SWITCH_NAME}`);
+      patched++;
       continue;
     }
 
     fs.writeFileSync(bundle.path, INJECT_LINE + "\n" + code);
-    console.log(
-      `  [ok] ${relPath(bundle.path)}: injected ${SWITCH_NAME}`,
-    );
+    console.log(`  [ok] ${relPath(bundle.path)}: injected ${SWITCH_NAME}`);
     patched++;
   }
 
-  console.log(`  [done] ${patched} file(s) patched`);
+  if (isCheck) {
+    console.log(`  [check] ${patched} file(s) patchable, 0 written`);
+  } else {
+    console.log(`  [done] ${patched} file(s) patched`);
+  }
 }
 
 main();

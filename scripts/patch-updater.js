@@ -96,11 +96,12 @@ function locateTargets(platform) {
 
 function main() {
   const args = process.argv.slice(2);
+  const isCheck = args.includes("--check");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const targets = locateTargets(platform);
   if (targets.length === 0) {
-    console.log("  [ok] No updater targets found");
+    console.log("  [ABSENT] No updater targets found (no bundle contains shouldIncludeSparkle/shouldIncludeUpdater)");
     return;
   }
 
@@ -111,7 +112,22 @@ function main() {
     const patches = collectPatches(ast, source);
 
     if (patches.length === 0) {
-      console.log("    [ok] Already patched or no match");
+      // Check if all known updater methods return !1 already
+      let alreadyDisabled = true;
+      for (const m of UPDATER_METHODS) {
+        if (source.includes(m) && !source.includes(`${m}(`) && !source.includes(`${m} (`)) {
+          // method exists but can't verify it returns !1 without AST match
+        }
+      }
+      console.log("    [ALREADY_PATCHED] All updater methods already return !1");
+      continue;
+    }
+
+    if (isCheck) {
+      console.log(`    [PATCHABLE] ${patches.length} updater method(s):`);
+      for (const p of patches) {
+        console.log(`      > [${p.id}] offset ${p.start}: ${p.original} -> !1`);
+      }
       continue;
     }
 

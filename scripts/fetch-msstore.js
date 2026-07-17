@@ -364,13 +364,8 @@ async function getDownloadUrl(updateID, revisionNumber, ring, digest) {
     if (fileDigest === digest && url) return url;
   }
 
-  // 如果 digest 匹配不到，返回第一个 URL
-  for (const loc of locations) {
-    const url = deepFind(loc, "Url");
-    if (url && typeof url === "string" && url.startsWith("http")) return url;
-  }
-
-  return "";
+  // Digest 匹配不到则报错，不静默降级到第一个 URL
+  throw new Error(`Download URL not found: digest ${digest} did not match any FileLocation (${locations.length} locations searched)`);
 }
 
 // ─── 深度搜索辅助 ────────────────────────────────────────────────

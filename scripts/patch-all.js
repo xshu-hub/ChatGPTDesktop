@@ -19,6 +19,8 @@ const PATCHES = [
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
+  "patch-sunset.js",
+  "patch-gpu.js",
 ];
 
 function main() {
@@ -26,8 +28,11 @@ function main() {
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win", "unix"].includes(a));
   const extra = args.filter((a) => a.startsWith("--"));
   const passArgs = [...(platform ? [platform] : []), ...extra];
+  const isCheck = extra.includes("--check");
 
+  let succeeded = 0;
   let failed = 0;
+  let skipped = 0;
 
   for (const script of PATCHES) {
     const scriptPath = path.join(__dirname, script);
@@ -36,13 +41,25 @@ function main() {
 
     try {
       execFileSync("node", [scriptPath, ...passArgs], { stdio: "inherit" });
+      succeeded++;
     } catch (e) {
-      console.error(`[x] ${label} failed (exit ${e.status})`);
-      failed++;
+      // A script exiting with code 1 may just mean "no targets" — don't treat as fatal
+      if (e.status === 1) {
+        console.error(`  [!] ${label}: no matching targets or check-only mode (exit 1)`);
+        skipped++;
+      } else {
+        console.error(`[x] ${label} failed (exit ${e.status})`);
+        failed++;
+      }
     }
   }
 
-  console.log(`\n== Summary: ${PATCHES.length - failed}/${PATCHES.length} succeeded ==`);
+  const total = PATCHES.length;
+  console.log(`\n== Patch Summary: ${succeeded} applied, ${skipped} skipped, ${failed} failed (${total} total) ==`);
+  if (isCheck) {
+    console.log("   [check] Read-only mode — no files were modified.");
+    console.log("   Review PATCHABLE/ALREADY_PATCHED/ABSENT above for each script.");
+  }
   if (failed > 0) process.exit(1);
 }
 

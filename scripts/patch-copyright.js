@@ -19,6 +19,8 @@ const { locateBundles, relPath } = require("./patch-util");
 
 const OLD_COPYRIGHT = "\u00A9 OpenAI"; // (c) OpenAI
 const NEW_COPYRIGHT = "\u00A9 OpenAI \u00B7 Cometix Space"; // (c) OpenAI . Cometix Space
+const OLD_HTML = '<div class="copyright">\u00A9 OpenAI</div>';
+const NEW_HTML = '<div class="copyright">\u00A9 OpenAI \u00B7 Cometix Space</div>';
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -112,39 +114,62 @@ function main() {
     const source = fs.readFileSync(bundle.path, "utf-8");
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
 
+    // Strategy 1: AST-based — find Property {copyright: "© OpenAI"}
     const t0 = Date.now();
     const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
     console.log(`   parse: ${Date.now() - t0}ms`);
 
     const patches = collectPatches(ast, source);
 
-    if (patches.length === 0) {
-      // Check if already patched
-      if (source.includes(NEW_COPYRIGHT)) {
-        console.log("   [ok] Already patched");
+    // Strategy 2: String-based — find HTML template <div class="copyright">© OpenAI</div>
+    // (upstream changed from JS object to HTML template in newer versions)
+    const htmlIdx = source.indexOf(OLD_HTML);
+    const alreadyHtmlPatched = source.includes(NEW_HTML);
+    const hasHtmlCopyright = htmlIdx !== -1 && !alreadyHtmlPatched;
+
+    if (patches.length === 0 && !hasHtmlCopyright) {
+      if (source.includes(NEW_COPYRIGHT) || alreadyHtmlPatched) {
+        console.log("   [ALREADY_PATCHED] Copyright already updated");
       } else {
-        console.log("   [!] No copyright property matched");
+        console.log("   [ABSENT] No copyright text matched (neither JS object nor HTML template)");
       }
       continue;
     }
 
     if (isCheck) {
-      console.log(`   [?] Matches: ${patches.length}`);
-      for (const p of patches) {
-        console.log(`     > offset ${p.start}: ${p.original} -> ${p.replacement}`);
+      if (patches.length > 0) {
+        console.log(`   [PATCHABLE-AST] ${patches.length} JS object match(es):`);
+        for (const p of patches) {
+          console.log(`     > offset ${p.start}: ${p.original} -> ${p.replacement}`);
+        }
+      }
+      if (hasHtmlCopyright) {
+        console.log(`   [PATCHABLE-HTML] offset ${htmlIdx}: <div class="copyright">...</div>`);
       }
       continue;
     }
 
-    patches.sort((a, b) => b.start - a.start);
     let code = source;
+
+    // Apply AST patches
+    patches.sort((a, b) => b.start - a.start);
     for (const p of patches) {
-      console.log(`   * offset ${p.start}: ${p.original} -> ${p.replacement}`);
+      console.log(`   * [AST] offset ${p.start}: ${p.original} -> ${p.replacement}`);
       code = code.slice(0, p.start) + p.replacement + code.slice(p.end);
     }
 
+    // Apply HTML template patch
+    if (hasHtmlCopyright) {
+      const idx = code.indexOf(OLD_HTML);
+      if (idx !== -1) {
+        code = code.slice(0, idx) + NEW_HTML + code.slice(idx + OLD_HTML.length);
+        console.log(`   * [HTML] offset ${idx}: replaced copyright in HTML template`);
+      }
+    }
+
     fs.writeFileSync(bundle.path, code, "utf-8");
-    console.log(`   [ok] Copyright updated: ${patches.length} replacements`);
+    const total = patches.length + (hasHtmlCopyright ? 1 : 0);
+    console.log(`   [ok] Copyright updated: ${total} replacements`);
   }
 }
 

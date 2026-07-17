@@ -82,4 +82,29 @@ function relPath(absPath) {
   return path.relative(PROJECT_ROOT, absPath);
 }
 
-module.exports = { locateBundles, relPath, SRC_DIR, PROJECT_ROOT };
+/**
+ * Compute SHA256 hash of a file for integrity verification.
+ * Used to guarantee --check mode has zero side effects.
+ */
+function fileHash(filePath) {
+  const crypto = require("crypto");
+  const fs = require("fs");
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+/**
+ * Dry-run guard: verify a file's hash hasn't changed after a read-only operation.
+ * Returns true if the file is unchanged.
+ */
+function verifyUnchanged(filePath, originalHash) {
+  const current = fileHash(filePath);
+  if (current !== originalHash) {
+    console.error(`  [CORRUPTION] ${filePath} was modified during check-only operation!`);
+    console.error(`    expected: ${originalHash}`);
+    console.error(`    actual:   ${current}`);
+    return false;
+  }
+  return true;
+}
+
+module.exports = { locateBundles, relPath, SRC_DIR, PROJECT_ROOT, fileHash, verifyUnchanged };
