@@ -15,7 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -42,7 +42,9 @@ function walk(node, visitor, parent) {
 //  Patch rule
 // ──────────────────────────────────────────────
 
-// Structural markers for sunset functions (i18n keys present in the sunset UI)
+// The sunset gate ID (Statsig hash of the sunset feature name)
+const SUNSET_GATE_ID = "2929582856";
+// Sunset UI i18n markers (for broader detection of sunset-related code)
 const SUNSET_MARKERS = ["appSunset", "app.sunset", "sunset"];
 
 function getLiteralValue(node) {
@@ -61,38 +63,26 @@ function collectPatches(ast, source) {
   const allPatches = [];
 
   walk(ast, (node) => {
-    if (
-      node.type !== "FunctionDeclaration" &&
-      node.type !== "FunctionExpression" &&
-      node.type !== "ArrowFunctionExpression"
-    )
-      return;
+    // Match gate calls directly: Identifier("2929582856") → !1
+    // This catches the sunset gate regardless of which function or chunk it lives in.
+    if (node.type !== "CallExpression") return;
+    if (node.callee?.type !== "Identifier") return;
+    if (node.arguments?.length !== 1) return;
 
-    const funcSrc = source.slice(node.start, node.end);
-    // Structural match: function must contain a sunset-related i18n key
-    if (!SUNSET_MARKERS.some((m) => funcSrc.includes(m))) return;
+    const argVal = getLiteralValue(node.arguments[0]);
+    if (argVal !== SUNSET_GATE_ID) return;
 
-    // Within this function, find gate calls: identifier(`numericString`)
-    walk(node, (child) => {
-      if (child.type !== "CallExpression") return;
-      if (child.callee?.type !== "Identifier") return;
-      if (child.arguments?.length !== 1) return;
+    const callSrc = source.slice(node.start, node.end);
+    if (callSrc === "!1") return;
 
-      const argVal = getLiteralValue(child.arguments[0]);
-      if (!argVal || !/^\d{6,}$/.test(argVal)) return;
-
-      const callSrc = source.slice(child.start, child.end);
-      if (callSrc === "!1") return;
-
-      if (!allPatches.some((x) => x.start === child.start)) {
-        allPatches.push({
-          start: child.start,
-          end: child.end,
-          replacement: "!1",
-          original: callSrc,
-        });
-      }
-    });
+    if (!allPatches.some((x) => x.start === node.start)) {
+      allPatches.push({
+        start: node.start,
+        end: node.end,
+        replacement: "!1",
+        original: callSrc,
+      });
+    }
   });
 
   return allPatches;
@@ -107,18 +97,34 @@ function main() {
   const isCheck = args.includes("--check");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
-  const bundles = locateBundles({
-    dir: "assets",
-    pattern: /^index-.*\.js$/,
-    platform,
-  });
+  // Search ALL webview/assets JS files (not just index-*.js).
+  // The sunset gate migrated to shared chunks in newer upstream versions.
+  const targets = [];
+  const platforms = platform
+    ? [platform]
+    : ["mac-arm64", "mac-x64", "win"].filter((p) =>
+        fs.existsSync(path.join(SRC_DIR, p, "_asar", "webview", "assets"))
+      );
 
-  if (bundles.length === 0) {
-    console.error("[x] No index bundle found");
-    process.exit(1);
+  for (const plat of platforms) {
+    const assetsDir = path.join(SRC_DIR, plat, "_asar", "webview", "assets");
+    if (!fs.existsSync(assetsDir)) continue;
+    for (const f of fs.readdirSync(assetsDir)) {
+      if (!f.endsWith(".js")) continue;
+      const fp = path.join(assetsDir, f);
+      const src = fs.readFileSync(fp, "utf-8");
+      if (src.includes(SUNSET_GATE_ID)) {
+        targets.push({ platform: plat, path: fp });
+      }
+    }
   }
 
-  for (const bundle of bundles) {
+  if (targets.length === 0) {
+    console.log("[ABSENT] Sunset gate " + SUNSET_GATE_ID + " not found in any webview chunk");
+    return;
+  }
+
+  for (const bundle of targets) {
     console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
@@ -130,16 +136,16 @@ function main() {
     const patches = collectPatches(ast, source);
 
     if (patches.length === 0) {
-      if (!SUNSET_MARKERS.some((m) => source.includes(m))) {
-        console.log("   [!] No sunset markers found in bundle");
+      if (source.includes("!1") && !source.includes(SUNSET_GATE_ID + '"') && !source.includes(SUNSET_GATE_ID + "`")) {
+        console.log("   [ALREADY_PATCHED] Sunset gate already disabled");
       } else {
-        console.log("   [ok] Sunset gate already disabled or no gate call found");
+        console.log("   [ABSENT] Gate ID found but AST pattern did not match");
       }
       continue;
     }
 
     if (isCheck) {
-      console.log(`   [?] Matches: ${patches.length}`);
+      console.log(`   [PATCHABLE] ${patches.length} match(es):`);
       for (const p of patches) {
         console.log(`     > offset ${p.start}: ${p.original} -> ${p.replacement}`);
       }

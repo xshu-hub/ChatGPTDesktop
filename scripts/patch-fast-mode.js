@@ -47,24 +47,31 @@ function collectPatches(ast, source) {
     const fnSrc = source.slice(node.start, node.end);
     if (!fnSrc.includes("authMethod") || !fnSrc.includes("fast_mode")) return;
 
-    // Inside this function, find: X.authMethod !== `chatgpt`
+    // Inside this function, find authMethod comparisons:
+    //   Old: X.authMethod !== `chatgpt`  → replace with !1 (never blocks non-chatgpt)
+    //   New: X.authMethod === `chatgpt`  → replace with !0 (always considered chatgpt)
     walk(node, (child) => {
-      if (child.type !== "BinaryExpression" || child.operator !== "!==") return;
+      if (child.type !== "BinaryExpression") return;
+      if (child.operator !== "!==" && child.operator !== "===") return;
 
       const childSrc = source.slice(child.start, child.end);
       if (!childSrc.includes("authMethod") || !childSrc.includes("chatgpt"))
         return;
 
-      if (childSrc === "!1") return;
+      if (childSrc === "!1" || childSrc === "!0") return;
 
       // Avoid duplicate patches at same offset
       if (patches.some((p) => p.start === child.start)) return;
+
+      // !== "chatgpt" → !1 (always false = never block)
+      // === "chatgpt" → !0 (always true = always allow)
+      const replacement = child.operator === "!==" ? "!1" : "!0";
 
       patches.push({
         id: "fast_mode_auth_gate",
         start: child.start,
         end: child.end,
-        replacement: "!1",
+        replacement,
         original: childSrc,
       });
     });
