@@ -21,6 +21,7 @@ const PATCHES = [
   "patch-archive-delete.js",
   "patch-sunset.js",
   "patch-gpu.js",
+  "patch-multi-agent.js",
 ];
 
 function main() {
