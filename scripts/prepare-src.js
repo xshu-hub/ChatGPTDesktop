@@ -211,6 +211,30 @@ function main() {
     const skipDirs = new Set(["node_modules"]);
     const count = copyRecursive(asarContentDir, SRC, null, skipDirs);
     console.log(`   [linux] _asar/ -> src/ (${count} files, skipped node_modules/)`);
+
+    // Remove architecture-mismatched binaries that would cause RPM strip failures.
+    // The upstream bundles Linux ELFs for both x64 and arm64. RPM's brp-strip
+    // fails when it encounters a wrong-arch binary (e.g. arm64 ELF in x64 package).
+    const wrongArchSuffix = platform === "linux-x64" ? "arm64" : "x64";
+    let stripped = 0;
+    const rmWrongArch = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { rmWrongArch(p); }
+        else if (e.name.includes(`_${wrongArchSuffix}`) || e.name.endsWith(`_${wrongArchSuffix}`)) {
+          fs.unlinkSync(p);
+          stripped++;
+        }
+      }
+    };
+    // cua_node: Computer Use Agent runtime — contains sky_linux_{arch} binaries
+    rmWrongArch(path.join(SRC, "cua_node"));
+    // plugins: native prebuilds for both architectures
+    rmWrongArch(path.join(SRC, "plugins"));
+    if (stripped > 0) {
+      console.log(`   [linux] removed ${stripped} ${wrongArchSuffix} architecture-mismatched files`);
+    }
   }
 
   // 4. Sync version to root package.json
