@@ -215,6 +215,7 @@ function main() {
     // Remove architecture-mismatched binaries that would cause RPM strip failures.
     // The upstream bundles Linux ELFs for both x64 and arm64. RPM's brp-strip
     // fails when it encounters a wrong-arch binary (e.g. arm64 ELF in x64 package).
+    // Must clean BOTH locations: flat src/ (forge ASAR) AND sourceDir (packageAfterCopy).
     const wrongArchSuffix = platform === "linux-x64" ? "arm64" : "x64";
     let stripped = 0;
     const rmWrongArch = (dir) => {
@@ -228,12 +229,12 @@ function main() {
         }
       }
     };
-    // cua_node: Computer Use Agent runtime — contains sky_linux_{arch} binaries
-    rmWrongArch(path.join(SRC, "cua_node"));
-    // plugins: native prebuilds for both architectures
-    rmWrongArch(path.join(SRC, "plugins"));
+    for (const cleanDir of [SRC, sourceDir]) {
+      rmWrongArch(path.join(cleanDir, "cua_node"));
+      rmWrongArch(path.join(cleanDir, "plugins"));
+    }
     if (stripped > 0) {
-      console.log(`   [linux] removed ${stripped} ${wrongArchSuffix} architecture-mismatched files`);
+      console.log(`   [linux] removed ${stripped} ${wrongArchSuffix} architecture files (src/ + source/)`);
     }
   }
 
