@@ -266,12 +266,15 @@ function assembleOutput(resourcesDir, destDir, label) {
     // These files are skipped by prepare-src.js anyway (it ignores node_modules/).
     // Verify ALL errors are only expected ENOENT from node_modules paths.
     const stderr = e.stderr?.toString() || e.message || "";
-    const allErrors = stderr.split("\n").filter(l => l.includes("Error:"));
-    const nodeModulesErrors = allErrors.filter(l => l.includes("ENOENT") && l.includes("node_modules"));
-    const unexpectedErrors = allErrors.filter(l => !nodeModulesErrors.includes(l));
+    // @electron/asar errors look like:
+    //   Error: Unable to extract some files:\n\nError: ENOENT: ...\nError: ENOENT: ...
+    const errLines = stderr.match(/Error:\s*ENOENT[^\n]*/g) || [];
+    const otherErrors = stderr.match(/Error:(?!\s*ENOENT)[^\n]*/g) || [];
+    const nonNodeModules = errLines.filter(l => !l.includes("node_modules"));
 
-    if (unexpectedErrors.length > 0) {
-      throw new Error(`${label}: ASAR extraction had unexpected errors:\n${unexpectedErrors.join("\n")}`);
+    if (otherErrors.length > 0 || nonNodeModules.length > 0) {
+      const details = [...otherErrors, ...nonNodeModules].join("\n");
+      throw new Error(`${label}: ASAR extraction had unexpected errors:\n${details}`);
     }
 
     const critical = [
@@ -283,7 +286,7 @@ function assembleOutput(resourcesDir, destDir, label) {
     if (missing.length > 0) {
       throw new Error(`${label}: ASAR extraction failed critically — missing: ${missing.map(p => path.relative(asarDest, p)).join(", ")}`);
     }
-    console.warn(`   [warn] ASAR extraction: ${nodeModulesErrors.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
+    console.warn(`   [warn] ASAR extraction: ${errLines.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
   }
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)
