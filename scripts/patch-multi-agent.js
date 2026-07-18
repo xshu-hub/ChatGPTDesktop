@@ -115,10 +115,10 @@ function locateTargets(platform) {
       if (!f.endsWith(".js")) continue;
       const fp = path.join(assetsDir, f);
       const src = fs.readFileSync(fp, "utf-8");
-      // ZO function: QO.safeParse(...).features.multi_agent_v2.max_concurrent_threads_per_session
-      // On some platforms the function ZO body is split across chunks.
-      // Search for the unique QO.safeParse + max_concurrent_threads combination.
-      if (src.includes('QO.safeParse') && src.includes('max_concurrent_threads_per_session')) {
+      // ZO function: X.safeParse(t).data.features.multi_agent_v2.max_concurrent_threads_per_session
+      // The schema variable name (QO, $O, etc.) differs per platform due to minification.
+      // "max_concurrent_threads_per_session" and ".safeParse(t)" are both unique to this function.
+      if (src.includes('max_concurrent_threads_per_session') && /\.safeParse\(/.test(src)) {
         targets.push({ platform: plat, path: fp });
       }
     }
@@ -147,7 +147,9 @@ function main() {
 
     // Quick check: does the guard still exist?
     // Pattern: if(X!==`chatgpt`)return; (the auth gate inside ZO)
-    if (!/if\(\w+!==`chatgpt`\)return;/.test(source)) {
+    // Guard pattern: if(X!==`chatgpt`)return; anywhere in the file
+    if (!/if\(\w+!==`chatgpt`\)return;/.test(source) &&
+        source.includes('max_concurrent_threads_per_session')) {
       console.log("   [ALREADY_PATCHED] ZO auth gate already removed");
       continue;
     }
