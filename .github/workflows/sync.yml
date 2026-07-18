@@ -9,6 +9,10 @@ on:
         description: "Force sync even without version change"
         type: boolean
         default: false
+      dry_run:
+        description: "Full build + validate but no commit/tag/release"
+        type: boolean
+        default: false
 
 env:
   NODE_VERSION: "24"
@@ -218,7 +222,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run tests
+        run: npm test
+
+      - name: Validate release artifacts
+        run: node scripts/validate-release-artifacts.js artifacts
+
       - name: Get upstream version and tag
+        if: ${{ !inputs.dry_run }}
         id: version
         run: |
           RESULT=$(node scripts/check-update.js --json --force)
@@ -259,7 +270,7 @@ jobs:
         run: ls -lhR artifacts/
 
       - name: Create Release
-        if: steps.version.outputs.version != ''
+        if: ${{ !inputs.dry_run && steps.version.outputs.version != '' }}
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
