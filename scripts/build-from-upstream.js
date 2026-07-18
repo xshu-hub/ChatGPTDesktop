@@ -230,10 +230,21 @@ function buildWin(platform) {
   console.log(`   [integrity] new hash: ${newHash.slice(0, 16)}...`);
 
   if (oldHash !== newHash) {
-    // Find Codex.exe in app root
+    // Find Codex.exe in app root and patch the embedded ASAR header hash.
+    // This is required for the EXE to trust the repacked app.asar.
     const exePath = path.join(outApp, "Codex.exe");
     if (fs.existsSync(exePath)) {
-      patchExeHash(exePath, oldHash, newHash);
+      try {
+        patchExeHash(exePath, oldHash, newHash);
+      } catch (e) {
+        // Upstream may have changed the EXE format (hash no longer embedded as plain text).
+        // Log a prominent warning — the ZIP may not start. Manual testing required.
+        console.error(`\n  [!] EXE hash patch FAILED — THE ZIP MAY NOT START`);
+        console.error(`  [!] ${e.message.split("\n")[0]}`);
+        console.error(`  [!] Old hash: ${oldHash}`);
+        console.error(`  [!] New hash: ${newHash}`);
+        console.error(`  [!] Manual testing required: install and launch the ZIP before release.\n`);
+      }
     } else {
       console.log("   [!] Codex.exe not found for hash patching");
     }
