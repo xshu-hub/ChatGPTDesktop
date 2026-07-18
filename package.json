@@ -27,7 +27,8 @@
     "bump-version": "node scripts/bump-version.js",
     "rebuild:native": "electron-rebuild",
     "rebuild:native-x64": "electron-rebuild --arch=x64",
-    "rebuild:native-arm64": "electron-rebuild --arch=arm64"
+    "rebuild:native-arm64": "electron-rebuild --arch=arm64",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.10.2",

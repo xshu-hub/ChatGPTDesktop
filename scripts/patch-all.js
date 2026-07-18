@@ -2,10 +2,16 @@
 /**
  * Run all patch scripts in sequence with structured status reporting.
  *
- * Each patch outputs a line: PATCH_RESULT: STATUS [details]
- * This script parses those lines and produces a summary.
+ * Each patch script MUST output exactly one PATCH_RESULT line:
+ *   PATCH_RESULT: APPLIED [details]
+ *   PATCH_RESULT: ALREADY_PATCHED [details]
+ *   PATCH_RESULT: NOT_APPLICABLE [details]
+ *   PATCH_RESULT: ABSENT [details]
+ *   PATCH_RESULT: FAILED [details]
  *
- * Exit code: non-zero if any REQUIRED patch is ABSENT or FAILED.
+ * No legacy inference — missing or invalid PATCH_RESULT → FAILED.
+ *
+ * Exit code: non-zero if any REQUIRED patch is ABSENT, FAILED, or MISSING.
  *
  * Usage:
  *   node scripts/patch-all.js [platform]         # Apply
@@ -14,7 +20,10 @@
 const { execFileSync } = require("child_process");
 const path = require("path");
 
-// Patches that MUST succeed (ABSENT or FAILED → build fails)
+const VALID_STATUSES = ["APPLIED", "ALREADY_PATCHED", "NOT_APPLICABLE", "ABSENT", "FAILED"];
+
+// Patches that MUST succeed (ABSENT, FAILED, or MISSING → build fails)
+// NOT_APPLICABLE is only allowed for patches with explicit platform guards.
 const REQUIRED = new Set([
   "patch-i18n.js",
   "patch-devtools.js",
@@ -26,7 +35,11 @@ const REQUIRED = new Set([
   "patch-multi-agent.js",
 ]);
 
-// All patches including optional ones
+// Patches where NOT_APPLICABLE is a valid outcome on any platform
+const ALLOWS_NOT_APPLICABLE = new Set([
+  "patch-gpu.js", // only applies to macOS x64
+]);
+
 const PATCHES = [
   "patch-i18n.js",
   "patch-copyright.js",
@@ -40,26 +53,24 @@ const PATCHES = [
   "patch-multi-agent.js",
 ];
 
-/**
- * Infer patch status from legacy output when PATCH_RESULT line is absent.
- */
-function inferStatus(output) {
-  // Explicit status markers take priority
-  if (/\[ABSENT\]/i.test(output)) return { status: "ABSENT", detail: "target not found in source" };
-  if (/\[ALREADY_PATCHED\]/i.test(output)) return { status: "ALREADY_PATCHED", detail: "already in desired state" };
-  if (/\[NOT_APPLICABLE\]/i.test(output) || /\[SKIP\]/i.test(output)) return { status: "NOT_APPLICABLE", detail: "platform not applicable" };
-  if (/\[PATCHABLE\]/i.test(output)) {
-    const n = (output.match(/PATCHABLE/g) || []).length;
-    return { status: "APPLIED", detail: `${n} location(s) patchable` };
-  }
-  // Action indicators
-  if (/\[ok\]/i.test(output) || /\b[0-9]+ replacements?\b/i.test(output) || /\binjected\b/i.test(output) || /\bguard\(s\) removed\b/i.test(output)) {
-    return { status: "APPLIED", detail: "legacy: modifications confirmed in output" };
-  }
-  // "not found" / "0 match" / "No chunk contains" → ABSENT (not ALREADY_PATCHED)
-  if (/not found\b|No chunk contains|0 match|no match/i.test(output)) return { status: "ABSENT", detail: "target not found (legacy inference)" };
-  // No indicators at all → APPLIED (legacy scripts that don't report status)
-  return { status: "APPLIED", detail: "legacy: exit 0 (no status indicators)" };
+// Patches that already output native PATCH_RESULT — run directly.
+// All others go through _patch-shim.js for PATCH_RESULT generation.
+const NATIVE_PATCHES = new Set([
+  "patch-fast-mode.js",
+  "patch-gpu.js",
+  "patch-multi-agent.js",
+]);
+
+function parseStatus(output) {
+  const lines = output.split("\n");
+  const statusLines = lines.filter(l => l.startsWith("PATCH_RESULT:"));
+  if (statusLines.length === 0) return null;
+
+  const parts = statusLines[0].slice("PATCH_RESULT:".length).trim().split(/\s+/);
+  const status = parts[0];
+  if (!VALID_STATUSES.includes(status)) return null;
+
+  return { status, detail: parts.slice(1).join(" ") };
 }
 
 function main() {
@@ -77,75 +88,75 @@ function main() {
     const label = script.replace(".js", "");
     console.log(`\n== ${label} ==`);
 
+    // Route through shim for legacy patches (no native PATCH_RESULT)
+    const useShim = !NATIVE_PATCHES.has(script);
+    const execArgs = useShim
+      ? [path.join(__dirname, "_patch-shim.js"), scriptPath, ...passArgs]
+      : [scriptPath, ...passArgs];
+
     try {
-      const output = execFileSync("node", [scriptPath, ...passArgs], {
+      const output = execFileSync("node", execArgs, {
         stdio: "pipe",
         encoding: "utf-8",
       });
 
-      // Parse PATCH_RESULT line
-      const statusLine = output.split("\n").find(l => l.startsWith("PATCH_RESULT:"));
-      let status, detail;
-      if (statusLine) {
-        const parts = statusLine.slice("PATCH_RESULT:".length).trim().split(/\s+/);
-        status = parts[0];
-        detail = parts.slice(1).join(" ");
+      const parsed = parseStatus(output);
+      if (!parsed) {
+        results.push({ script: label, status: "MISSING", detail: "no valid PATCH_RESULT line" });
+        if (REQUIRED.has(script)) {
+          errors.push(`${label}: MISSING (REQUIRED) — no PATCH_RESULT line in output`);
+        }
       } else {
-        // Smart inference from output patterns
-        const inferred = inferStatus(output);
-        status = inferred.status;
-        detail = inferred.detail;
-      }
-      results.push({ script: label, status, detail });
-      if ((status === "ABSENT" || status === "FAILED") && REQUIRED.has(script)) {
-        errors.push(`${label}: ${status} (REQUIRED) — ${detail}`);
+        results.push({ script: label, ...parsed });
+        const badStatuses = ["ABSENT", "FAILED", "MISSING"];
+        if (badStatuses.includes(parsed.status) && REQUIRED.has(script)) {
+          errors.push(`${label}: ${parsed.status} (REQUIRED) — ${parsed.detail}`);
+        }
+        if (parsed.status === "NOT_APPLICABLE" && REQUIRED.has(script) && !ALLOWS_NOT_APPLICABLE.has(script)) {
+          errors.push(`${label}: NOT_APPLICABLE (REQUIRED) — ${parsed.detail} (not in allowlist)`);
+        }
       }
     } catch (e) {
-      // Child process failed (non-zero exit)
+      // Non-zero exit: try to parse PATCH_RESULT from combined output
       const output = (e.stdout || "") + "\n" + (e.stderr || "");
-      const statusLine = output.split("\n").find(l => l.startsWith("PATCH_RESULT:"));
-      if (statusLine) {
-        const parts = statusLine.slice("PATCH_RESULT:".length).trim().split(/\s+/);
-        const status = parts[0];
-        const detail = parts.slice(1).join(" ");
-        results.push({ script: label, status, detail });
-        if (status === "ABSENT" || status === "FAILED") {
-          if (REQUIRED.has(script)) {
-            errors.push(`${label}: ${status} (REQUIRED) — ${detail}`);
-          }
+      const parsed = parseStatus(output);
+      const status = parsed ? parsed.status : "FAILED";
+      const detail = parsed ? parsed.detail : (e.stderr || e.message || "").slice(0, 200);
+
+      // If the script crashed without PATCH_RESULT, it's always FAILED
+      results.push({ script: label, status: parsed ? status : "FAILED", detail: parsed ? detail : `crash: ${detail}` });
+
+      const badStatuses = ["ABSENT", "FAILED", "MISSING"];
+      if (badStatuses.includes(status) && REQUIRED.has(script)) {
+        errors.push(`${label}: ${status} (REQUIRED) — ${detail}`);
+        if (!parsed) {
+          // Override: crashed without PATCH_RESULT is always FAILED regardless of exit code
+          results[results.length - 1].status = "FAILED";
         }
-      } else {
-        const errOutput = (e.stdout || "") + "\n" + (e.stderr || "");
-        const inferred = inferStatus(errOutput);
-        // If inference found ABSENT or a clear status, use it; otherwise FAILED
-        const status = (inferred.status === "ABSENT") ? "ABSENT" : "FAILED";
-        const detail = (inferred.status === "ABSENT") ? inferred.detail : (e.stderr || e.message || "").slice(0, 200);
-        results.push({ script: label, status, detail });
-        if ((status === "ABSENT" || status === "FAILED") && REQUIRED.has(script)) {
-          errors.push(`${label}: ${status} (REQUIRED) — ${detail}`);
-        }
+      }
+      if (parsed && parsed.status === "NOT_APPLICABLE" && REQUIRED.has(script) && !ALLOWS_NOT_APPLICABLE.has(script)) {
+        errors.push(`${label}: NOT_APPLICABLE (REQUIRED) — ${parsed.detail}`);
       }
     }
   }
 
   // Summary
   const counts = {};
-  for (const s of ["APPLIED", "ALREADY_PATCHED", "NOT_APPLICABLE", "ABSENT", "FAILED"]) {
+  for (const s of [...VALID_STATUSES, "MISSING"]) {
     counts[s] = results.filter(r => r.status === s).length;
   }
-  console.log(`\n== Patch Summary: ${counts.APPLIED} APPLIED, ${counts.ALREADY_PATCHED} ALREADY_PATCHED, ${counts.NOT_APPLICABLE} NOT_APPLICABLE, ${counts.ABSENT} ABSENT, ${counts.FAILED} FAILED (${PATCHES.length} total) ==`);
+  console.log(`\n== Patch Summary: ${counts.APPLIED} APPLIED, ${counts.ALREADY_PATCHED} ALREADY_PATCHED, ${counts.NOT_APPLICABLE} NOT_APPLICABLE, ${counts.ABSENT} ABSENT, ${counts.FAILED} FAILED, ${counts.MISSING} MISSING (${PATCHES.length} total) ==`);
   if (isCheck) {
     console.log("   [check] Read-only mode — no files were modified.");
   }
 
-  // Print per-patch detail
   for (const r of results) {
-    const flag = r.status === "ABSENT" || r.status === "FAILED" ? " ⚠" : "";
+    const flag = ["ABSENT", "FAILED", "MISSING"].includes(r.status) ? " ⚠" : "";
     console.log(`   ${r.status.padEnd(18)} ${r.script}${flag}${r.detail ? " — " + r.detail : ""}`);
   }
 
   if (errors.length > 0) {
-    console.error(`\n[x] ${errors.length} REQUIRED patch(es) failed:`);
+    console.error(`\n[x] ${errors.length} patch error(s):`);
     for (const e of errors) console.error(`  [x] ${e}`);
     process.exit(1);
   }
