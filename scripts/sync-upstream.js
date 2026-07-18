@@ -268,13 +268,20 @@ function assembleOutput(resourcesDir, destDir, label) {
     const stderr = e.stderr?.toString() || e.message || "";
     // @electron/asar errors look like:
     //   Error: Unable to extract some files:\n\nError: ENOENT: ...\nError: ENOENT: ...
-    const errLines = stderr.match(/Error:\s*ENOENT[^\n]*/g) || [];
-    const otherErrors = stderr.match(/Error:(?!\s*ENOENT)[^\n]*/g) || [];
-    const nonNodeModules = errLines.filter(l => !l.includes("node_modules"));
+    const specificErrors = stderr.match(/Error:\s*(.+?)(?:\n|$)/g) || [];
+    // Acceptable: wrapper message "Unable to extract some files" + ENOENT in node_modules
+    const wrapperErrors = specificErrors.filter(l => l.includes("Unable to extract"));
+    const enoentErrors = specificErrors.filter(l => l.includes("ENOENT"));
+    const otherErrors = specificErrors.filter(l => !wrapperErrors.includes(l) && !enoentErrors.includes(l));
+    const nonNodeModules = enoentErrors.filter(l => !l.includes("node_modules"));
 
     if (otherErrors.length > 0 || nonNodeModules.length > 0) {
       const details = [...otherErrors, ...nonNodeModules].join("\n");
       throw new Error(`${label}: ASAR extraction had unexpected errors:\n${details}`);
+    }
+    if (enoentErrors.length === 0 && wrapperErrors.length > 0) {
+      // Only wrapper message, no ENOENT details — real failure
+      throw new Error(`${label}: ASAR extraction failed: ${wrapperErrors[0]}`);
     }
 
     const critical = [
@@ -286,7 +293,7 @@ function assembleOutput(resourcesDir, destDir, label) {
     if (missing.length > 0) {
       throw new Error(`${label}: ASAR extraction failed critically — missing: ${missing.map(p => path.relative(asarDest, p)).join(", ")}`);
     }
-    console.warn(`   [warn] ASAR extraction: ${errLines.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
+    console.warn(`   [warn] ASAR extraction: ${enoentErrors.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
   }
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)
