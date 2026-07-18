@@ -57,9 +57,46 @@ function patchAppMain(bundles) {
   return patched;
 }
 
-// ─── Layer 2: data-controls delete button injection ─────────────
+// ─── Layer 2: Force-enable upstream built-in delete button ────────
+//
+// Upstream now has a Zt component with showDeleteButton prop, gated by
+// a feature flag comparison like: showDeleteButton:X===ne
+// Replace with showDeleteButton:!0 to force-enable for all users.
 
 function patchDataControls(bundles) {
+  let patched = 0;
+  for (const bundle of bundles) {
+    const code = fs.readFileSync(bundle.path, "utf-8");
+
+    if (/showDeleteButton\s*:\s*!0/.test(code)) {
+      console.log(`  [ALREADY_PATCHED] ${relPath(bundle.path)}: showDeleteButton already !0`);
+      continue;
+    }
+
+    const re = /showDeleteButton\s*:\s*(\w+)\s*===?\s*(\w+)/g;
+    const matches = [...code.matchAll(re)];
+    if (matches.length === 0) {
+      console.log(`  [ABSENT] ${relPath(bundle.path)}: no feature-gated showDeleteButton found`);
+      continue;
+    }
+
+    let newCode = code;
+    for (const m of matches) {
+      console.log(`  * ${relPath(bundle.path)}: showDeleteButton:${m[1]}===${m[2]} -> !0`);
+      newCode = newCode.slice(0, m.index) + 'showDeleteButton:!0' + newCode.slice(m.index + m[0].length);
+    }
+
+    fs.writeFileSync(bundle.path, newCode);
+    console.log(`  [ok] ${relPath(bundle.path)}: delete button force-enabled (${matches.length} gate(s))`);
+    patched++;
+  }
+  return patched;
+}
+
+// ─── Legacy Layer 2: data-controls delete button AST injection ─────
+// (kept for reference; not used since upstream now has built-in delete)
+
+function patchDataControlsLegacy(bundles) {
   let patched = 0;
   for (const bundle of bundles) {
     const code = fs.readFileSync(bundle.path, "utf-8");
@@ -291,16 +328,21 @@ function patchAppMainCheck(bundles) {
 function patchDataControlsCheck(bundles) {
   for (const bundle of bundles) {
     const code = fs.readFileSync(bundle.path, "utf-8");
-    if (code.includes("delete-conversation")) {
-      console.log(`    [ALREADY_PATCHED] ${relPath(bundle.path)}: delete button already exists`);
+    // Upstream now has a Zt component with showDeleteButton prop gated by feature flag.
+    // Check if already force-enabled
+    if (/showDeleteButton\s*:\s*!0/.test(code)) {
+      console.log(`    [ALREADY_PATCHED] ${relPath(bundle.path)}: showDeleteButton already !0`);
       continue;
     }
-    // Quick check: does the bundle contain the ROW_CLASS and an unarchive button pattern?
-    if (!code.includes("unarchive-conversation")) {
-      console.log(`    [ABSENT] ${relPath(bundle.path)}: no unarchive-conversation references found`);
-      continue;
+    // Check if the gate exists: showDeleteButton:X===ne (some feature flag comparison)
+    const gateMatch = code.match(/showDeleteButton\s*:\s*(\w+)\s*===?\s*(\w+)/);
+    if (gateMatch) {
+      console.log(`    [PATCHABLE] ${relPath(bundle.path)}: showDeleteButton:${gateMatch[1]}===${gateMatch[2]} -> !0`);
+    } else if (code.includes("showDeleteButton")) {
+      console.log(`    [ABSENT] ${relPath(bundle.path)}: showDeleteButton found but pattern unrecognized`);
+    } else {
+      console.log(`    [ABSENT] ${relPath(bundle.path)}: no showDeleteButton prop found`);
     }
-    console.log(`    [PATCHABLE] ${relPath(bundle.path)}: contains unarchive-conversation, can inject delete button`);
   }
 }
 

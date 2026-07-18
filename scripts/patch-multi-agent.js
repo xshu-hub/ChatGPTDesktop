@@ -115,7 +115,9 @@ function locateTargets(platform) {
       if (!f.endsWith(".js")) continue;
       const fp = path.join(assetsDir, f);
       const src = fs.readFileSync(fp, "utf-8");
-      if (src.includes("multi_agent_v2") && src.includes("function ZO(")) {
+      // function ZO({authMethod:...}){if(...!==`chatgpt`)return;let n=QO.safeParse...
+      if (src.includes('function ZO({authMethod:e,config:t}){if(e!==`chatgpt`)return;let n=QO.safeParse(t)') ||
+          src.includes('function ZO({authMethod:e,config:t}){let n=QO.safeParse(t)')) {
         targets.push({ platform: plat, path: fp });
       }
     }
@@ -143,7 +145,7 @@ function main() {
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
 
     // Quick check: is the gate already removed?
-    if (source.includes("multi_agent_v2") && !source.includes('if(e!==`chatgpt`)return')) {
+    if (source.includes("max_concurrent_threads_per_session") && !source.includes('if(e!==`chatgpt`)return;let n=QO.safeParse')) {
       console.log("   [ALREADY_PATCHED] ZO auth gate already removed");
       continue;
     }

@@ -334,21 +334,15 @@ async function main() {
     return;
   }
 
-  // Download and extract
+  // Download and extract — errors are FATAL (no partial builds)
   if (!SKIP_MAC && results["mac-arm64"]) {
-    try {
-      results["mac-arm64"] = await syncMac("arm64", APPCAST_ARM64, path.join(SRC_DIR, "mac-arm64"));
-    } catch (e) { console.error(`   [x] mac-arm64: ${e.message}`); }
+    results["mac-arm64"] = await syncMac("arm64", APPCAST_ARM64, path.join(SRC_DIR, "mac-arm64"));
   }
   if (!SKIP_MAC && results["mac-x64"]) {
-    try {
-      results["mac-x64"] = await syncMac("x64", APPCAST_X64, path.join(SRC_DIR, "mac-x64"));
-    } catch (e) { console.error(`   [x] mac-x64: ${e.message}`); }
+    results["mac-x64"] = await syncMac("x64", APPCAST_X64, path.join(SRC_DIR, "mac-x64"));
   }
   if (!SKIP_WIN && results.win) {
-    try {
-      results.win = await syncWin(path.join(SRC_DIR, "win"));
-    } catch (e) { console.error(`   [x] win: ${e.message}`); }
+    results.win = await syncWin(path.join(SRC_DIR, "win"));
   }
 
   const saved = loadVersions();

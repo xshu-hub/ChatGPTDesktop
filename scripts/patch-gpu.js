@@ -69,7 +69,7 @@ function main() {
 
   const bundles = locateBundles({
     dir: "build",
-    pattern: /^bootstrap\.js$/,
+    pattern: /^bootstrap(-[^.]+)?\.js$/,
     platform: "mac-x64",
   });
 
