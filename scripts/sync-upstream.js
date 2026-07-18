@@ -268,31 +268,34 @@ function assembleOutput(resourcesDir, destDir, label) {
     // 0 ENOENT, non-node_modules errors, or unparseable output → hard failure.
 
     const allOutput = [e.stdout, e.stderr, e.message].filter(Boolean).join("\n");
-    const errors = allOutput.match(/Error:\s*[^\n]+/g) || [];
+    // @electron/asar error format:
+    //   Error: Unable to extract some files:\n\nError: ENOENT: ...\nError: ENOENT: ...
+    const allErrors = allOutput.match(/Error:\s*[^\n]+/g) || [];
 
-    if (errors.length === 0) {
-      // Can't parse any error details — unknown failure mode
+    if (allErrors.length === 0) {
       throw new Error(`${label}: ASAR extraction failed (unparseable). Full output:\n${allOutput.slice(0, 500)}`);
     }
 
-    const enoentErrors = errors.filter(l => /ENOENT/i.test(l));
-    const nonEnoentErrors = errors.filter(l => !enoentErrors.includes(l));
-    const enoentInNodeModules = enoentErrors.filter(l => /node_modules/.test(l));
-    const enoentOutside = enoentErrors.filter(l => !enoentInNodeModules.includes(l));
+    // Three-category classification:
+    const wrapperErrors = allErrors.filter(l => /Unable to extract some files/i.test(l));
+    const enoentErrors = allErrors.filter(l => /ENOENT/i.test(l));
+    const otherErrors = allErrors.filter(l => !wrapperErrors.includes(l) && !enoentErrors.includes(l));
 
-    // Fail on any non-ENOENT error
-    if (nonEnoentErrors.length > 0) {
-      throw new Error(`${label}: ASAR extraction had ${nonEnoentErrors.length} non-ENOENT error(s):\n${nonEnoentErrors.join("\n")}\n(Full output: ${allOutput.slice(0, 300)})`);
+    // Fail on genuine non-ENOENT errors (not the ASAR wrapper)
+    if (otherErrors.length > 0) {
+      throw new Error(`${label}: ASAR extraction had ${otherErrors.length} unexpected error(s):\n${otherErrors.join("\n")}`);
     }
 
-    // Fail on ENOENT outside node_modules
+    // Must have at least one ENOENT
+    if (enoentErrors.length === 0) {
+      throw new Error(`${label}: ASAR extraction failed with 0 ENOENT errors. Errors: ${allErrors.length}\n${allErrors.slice(0, 3).join("\n")}`);
+    }
+
+    // All ENOENT must be in node_modules
+    const enoentInNodeModules = enoentErrors.filter(l => /node_modules/.test(l));
+    const enoentOutside = enoentErrors.filter(l => !/node_modules/.test(l));
     if (enoentOutside.length > 0) {
       throw new Error(`${label}: ASAR extraction had ${enoentOutside.length} ENOENT outside node_modules:\n${enoentOutside.join("\n")}`);
-    }
-
-    // Fail if 0 ENOENT in node_modules — not MAX_PATH, something else is wrong
-    if (enoentInNodeModules.length === 0) {
-      throw new Error(`${label}: ASAR extraction failed with 0 ENOENT errors (not a MAX_PATH issue). Errors: ${errors.length}\n${errors.slice(0, 3).join("\n")}\nFull output: ${allOutput.slice(0, 400)}`);
     }
 
     // Tolerated: >=1 ENOENT, all within node_modules
