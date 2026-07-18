@@ -259,7 +259,25 @@ function assembleOutput(resourcesDir, destDir, label) {
   // 1. Extract app.asar → _asar/ (for patching)
   const asarDest = path.join(destDir, "_asar");
   console.log("   [asar extract] -> _asar/");
-  execSync(`npx asar extract "${asarPath}" "${asarDest}"`);
+  try {
+    execSync(`npx asar extract "${asarPath}" "${asarDest}"`, { stdio: "pipe" });
+  } catch (e) {
+    // On Windows, deeply-nested symlinks in node_modules/ can exceed MAX_PATH.
+    // These files are skipped by prepare-src.js anyway (it ignores node_modules/).
+    // Verify critical paths exist; if so, warn but continue.
+    const critical = [
+      path.join(asarDest, "package.json"),
+      path.join(asarDest, ".vite", "build"),
+      path.join(asarDest, "webview", "assets"),
+    ];
+    const missing = critical.filter(p => !fs.existsSync(p));
+    if (missing.length > 0) {
+      throw new Error(`${label}: ASAR extraction failed critically — missing: ${missing.map(p => path.relative(asarDest, p)).join(", ")}`);
+    }
+    const stderr = e.stderr?.toString() || e.message || "";
+    const errLines = stderr.split("\n").filter(l => l.includes("ENOENT")).length;
+    console.warn(`   [warn] ASAR extraction had ${errLines} ENOENT errors (node_modules/ symlinks) — critical files OK, continuing`);
+  }
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)
   const unpackedSrc = path.join(resourcesDir, "app.asar.unpacked");
