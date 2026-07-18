@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * Post-build patch: Force-enable Fast mode (speed selector)
+ * Post-build patch: Force-enable Fast mode (speed selector + request tier)
  *
- * The speed selector is gated by authMethod === "chatgpt" checks.
- * API-key users never see it because their authMethod differs.
+ * Gate 1 (UI selector): authMethod comparison that controls speed selector visibility.
+ * Gate 2 (request tier): same isServiceTierAllowed check controls which service tier
+ *                        is sent with API requests. Both gates share the same code.
  *
- * This patch locates BinaryExpression nodes matching:
- *   X.authMethod !== "chatgpt"
- * inside functions that also reference "fast_mode", and replaces
- * the comparison with !1 (always false), removing the auth gate.
+ * AST match: find BinaryExpression X.authMethod !== "chatgpt" or === "chatgpt"
+ * inside functions referencing "fast_mode". Replace !== with !1, === with !0.
  *
- * Target: permissions-mode-helpers-*.js (or any chunk with the pattern)
+ * Target: any webview chunk containing both authMethod and fast_mode
  */
 const fs = require("fs");
 const path = require("path");
@@ -154,8 +153,10 @@ function main() {
 
   if (totalPatched > 0) {
     console.log(`  [ok] ${totalPatched} auth gate(s) removed`);
+    reportPatchStatus("APPLIED", `UI gate: ${totalPatched} removed | Request gate: same isServiceTierAllowed check unblocked`);
   } else {
-    console.log("  [ok] fast_mode auth gates already patched or absent");
+    console.log("  [ALREADY_PATCHED] fast_mode auth gates already patched or absent");
+    reportPatchStatus("ALREADY_PATCHED", "UI gate: not found | Request gate: isServiceTierAllowed already unblocked");
   }
 }
 

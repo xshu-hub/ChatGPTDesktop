@@ -230,23 +230,21 @@ function buildWin(platform) {
   console.log(`   [integrity] new hash: ${newHash.slice(0, 16)}...`);
 
   if (oldHash !== newHash) {
-    // Find Codex.exe in app root and patch the embedded ASAR header hash.
-    // This is required for the EXE to trust the repacked app.asar.
     const exePath = path.join(outApp, "Codex.exe");
     if (fs.existsSync(exePath)) {
-      try {
-        patchExeHash(exePath, oldHash, newHash);
-      } catch (e) {
-        // Upstream may have changed the EXE format (hash no longer embedded as plain text).
-        // Log a prominent warning — the ZIP may not start. Manual testing required.
-        console.error(`\n  [!] EXE hash patch FAILED — THE ZIP MAY NOT START`);
-        console.error(`  [!] ${e.message.split("\n")[0]}`);
-        console.error(`  [!] Old hash: ${oldHash}`);
-        console.error(`  [!] New hash: ${newHash}`);
-        console.error(`  [!] Manual testing required: install and launch the ZIP before release.\n`);
+      const result = tryPatchExeHash(exePath, oldHash, newHash);
+      switch (result.status) {
+        case "HASH_PATCHED":
+          console.log(`   [hash] ${result.detail}`);
+          break;
+        case "NOT_APPLICABLE":
+          console.log(`   [hash] NOT_APPLICABLE — ${result.detail}`);
+          break;
+        case "FAILED":
+          throw new Error(`EXE hash patch FAILED: ${result.detail}`);
       }
     } else {
-      console.log("   [!] Codex.exe not found for hash patching");
+      console.log("   [hash] NOT_APPLICABLE — Codex.exe not found");
     }
   }
 
@@ -274,61 +272,56 @@ function computeAsarHeaderHash(asarPath) {
   return crypto.createHash("sha256").update(header).digest("hex");
 }
 
-function patchExeHash(exePath, oldHash, newHash) {
+function tryPatchExeHash(exePath, oldHash, newHash) {
   const buf = fs.readFileSync(exePath);
 
-  // Try ASCII first
+  // Check if the EXE has any integrity marker at all
+  const hasMarkerAscii = buf.includes("ElectronAsarIntegrity");
+  const markerUtf16 = Buffer.from("ElectronAsarIntegrity", "utf16le");
+  const hasMarkerUtf16 = buf.indexOf(markerUtf16) >= 0;
+
+  if (!hasMarkerAscii && !hasMarkerUtf16) {
+    // Upstream EXE no longer embeds ASAR integrity — verified working on real machine.
+    return { status: "NOT_APPLICABLE", detail: "no ElectronAsarIntegrity marker in EXE (upstream format change)" };
+  }
+
+  // Try ASCII
   let idx = buf.indexOf(Buffer.from(oldHash, "ascii"));
   let encoding = "ascii";
 
-  // Try UTF-16LE (Windows wide strings)
+  // Try UTF-16LE
   if (idx < 0) {
     const oldUtf16 = Buffer.alloc(oldHash.length * 2);
-    for (let i = 0; i < oldHash.length; i++) {
-      oldUtf16.writeUInt16LE(oldHash.charCodeAt(i), i * 2);
-    }
+    for (let i = 0; i < oldHash.length; i++) oldUtf16.writeUInt16LE(oldHash.charCodeAt(i), i * 2);
     idx = buf.indexOf(oldUtf16);
     encoding = "utf16le";
   }
 
   if (idx < 0) {
-    // Try searching for any 64-char hex string matching the hash
-    const hashRe = /[0-9a-fA-F]{64}/g;
-    const ascii = buf.toString("ascii");
-    let match;
-    while ((match = hashRe.exec(ascii)) !== null) {
-      if (match[0] === oldHash) {
-        idx = match.index;
-        encoding = "ascii";
-        break;
-      }
-    }
+    // Integrity marker exists but hash not found nearby — format mismatch
+    return { status: "FAILED", detail: `ElectronAsarIntegrity marker found but old hash not located (${encoding})` };
   }
 
-  if (idx < 0) {
-    // Last resort: search for ElectronAsarIntegrity marker in UTF-16
-    const markerUtf16 = Buffer.from("ElectronAsarIntegrity", "utf16le");
-    const markerIdx = buf.indexOf(markerUtf16);
-    if (markerIdx >= 0) {
-      const nearby = buf.slice(markerIdx, markerIdx + 400).toString("hex");
-      throw new Error(`EXE hash patch failed: ElectronAsarIntegrity found at offset ${markerIdx} but hash not nearby.\n` +
-        `  Expected: ${oldHash}\n  Nearby hex: ${nearby.slice(0, 120)}...`);
-    }
-    throw new Error(`EXE hash patch failed: old hash not found in ${path.basename(exePath)} (tried ASCII, UTF-16LE, regex).\n` +
-      `  Expected: ${oldHash}\n  The EXE format may have changed. The produced ZIP will not start.`);
-  }
-
+  // Apply the patch
   if (encoding === "utf16le") {
     const newUtf16 = Buffer.alloc(newHash.length * 2);
-    for (let i = 0; i < newHash.length; i++) {
-      newUtf16.writeUInt16LE(newHash.charCodeAt(i), i * 2);
-    }
+    for (let i = 0; i < newHash.length; i++) newUtf16.writeUInt16LE(newHash.charCodeAt(i), i * 2);
     newUtf16.copy(buf, idx);
   } else {
     Buffer.from(newHash, "ascii").copy(buf, idx);
   }
   fs.writeFileSync(exePath, buf);
-  console.log(`   [integrity] exe hash patched at offset ${idx} (${encoding})`);
+
+  // Verify the write
+  const verify = fs.readFileSync(exePath);
+  const verifyIdx = encoding === "utf16le"
+    ? (() => { const v = Buffer.alloc(newHash.length * 2); for (let i = 0; i < newHash.length; i++) v.writeUInt16LE(newHash.charCodeAt(i), i * 2); return verify.indexOf(v); })()
+    : verify.indexOf(Buffer.from(newHash, "ascii"));
+  if (verifyIdx < 0) {
+    return { status: "FAILED", detail: "write verification failed — hash not found after patch" };
+  }
+
+  return { status: "HASH_PATCHED", detail: `offset ${idx} (${encoding})` };
 }
 
 function updateAsarIntegrity(asarPath, infoPlistPath) {

@@ -35,18 +35,21 @@ jobs:
         id: detect
         run: |
           set +e
-          node scripts/check-update.js --json --force 2>&1
-          exit_code=$?
-          set -e
-
+          # Only use --force for manual workflow_dispatch, not for scheduled runs
           if [ "${{ inputs.force }}" = "true" ]; then
-            echo "has_update=true" >> "$GITHUB_OUTPUT"
-          elif [ $exit_code -eq 0 ]; then
+            node scripts/check-update.js --json --force 2>&1
             echo "has_update=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_update=false" >> "$GITHUB_OUTPUT"
-            echo "No upstream update detected."
+            node scripts/check-update.js --json 2>&1
+            exit_code=$?
+            if [ $exit_code -eq 0 ]; then
+              echo "has_update=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_update=false" >> "$GITHUB_OUTPUT"
+              echo "No upstream update detected."
+            fi
           fi
+          set -e
 
   # ──────────────────────────────────────────────
   # Each platform: sync + patch + build in one job
@@ -187,8 +190,13 @@ jobs:
   # Bump version + tag + release
   # ──────────────────────────────────────────────
   release:
-    needs: [build-mac, build-windows, build-linux]
-    if: always() && needs.check.result == 'success'
+    needs: [check, build-mac, build-windows, build-linux]
+    if: |
+      !cancelled() &&
+      needs.check.result == 'success' &&
+      needs.build-mac.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
