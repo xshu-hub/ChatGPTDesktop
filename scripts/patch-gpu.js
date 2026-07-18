@@ -62,8 +62,15 @@ function main() {
     ["mac-arm64", "mac-x64", "win"].includes(a),
   );
 
+  // GPU patch only applies to macOS x64 (Intel Mac). Skip on Linux and other platforms.
+  if (process.platform !== "darwin") {
+    console.log("  [NOT_APPLICABLE] GPU patch only applies to macOS (current: " + process.platform + ")");
+    reportPatchStatus("NOT_APPLICABLE", "macOS only, current platform: " + process.platform);
+    return;
+  }
   if (platform && platform !== "mac-x64") {
-    console.log("  [SKIP] GPU patch only applies to mac-x64");
+    console.log("  [NOT_APPLICABLE] GPU patch only applies to mac-x64 (current: " + platform + ")");
+    reportPatchStatus("NOT_APPLICABLE", "mac-x64 only");
     return;
   }
 

@@ -44,17 +44,21 @@ const PATCHES = [
  * Infer patch status from legacy output when PATCH_RESULT line is absent.
  */
 function inferStatus(output) {
-  if (/\[ABSENT\]/i.test(output)) return { status: "ABSENT", detail: "target pattern not found in source" };
+  // Explicit status markers take priority
+  if (/\[ABSENT\]/i.test(output)) return { status: "ABSENT", detail: "target not found in source" };
   if (/\[ALREADY_PATCHED\]/i.test(output)) return { status: "ALREADY_PATCHED", detail: "already in desired state" };
-  if (/\[SKIP\]/i.test(output)) return { status: "NOT_APPLICABLE", detail: "platform not applicable" };
+  if (/\[NOT_APPLICABLE\]/i.test(output) || /\[SKIP\]/i.test(output)) return { status: "NOT_APPLICABLE", detail: "platform not applicable" };
   if (/\[PATCHABLE\]/i.test(output)) {
     const n = (output.match(/PATCHABLE/g) || []).length;
     return { status: "APPLIED", detail: `${n} location(s) patchable` };
   }
-  if (/\[ok\]/i.test(output) || /replacement/i.test(output) || /injected/i.test(output)) {
-    return { status: "APPLIED", detail: "legacy: ok/replacement/injected" };
+  // Action indicators
+  if (/\[ok\]/i.test(output) || /\b[0-9]+ replacements?\b/i.test(output) || /\binjected\b/i.test(output) || /\bguard\(s\) removed\b/i.test(output)) {
+    return { status: "APPLIED", detail: "legacy: modifications confirmed in output" };
   }
-  if (/no match|not found|0 match/i.test(output)) return { status: "ALREADY_PATCHED", detail: "no matches (already patched or removed)" };
+  // "not found" / "0 match" / "No chunk contains" → ABSENT (not ALREADY_PATCHED)
+  if (/not found\b|No chunk contains|0 match|no match/i.test(output)) return { status: "ABSENT", detail: "target not found (legacy inference)" };
+  // No indicators at all → APPLIED (legacy scripts that don't report status)
   return { status: "APPLIED", detail: "legacy: exit 0 (no status indicators)" };
 }
 

@@ -166,8 +166,9 @@ function main() {
     const source = fs.readFileSync(bundle.path, "utf-8");
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
 
-    // Quick pre-check: does the guard pattern exist?
-    if (!/if\(\w+!==`chatgpt`\)return;/.test(source)) {
+    // Quick pre-check: search for any authMethod !== "chatgpt" guard followed by bare return
+    // Accepts: if(X!==`chatgpt`)return;  if(X!=="chatgpt")return;  if( X !== `chatgpt` ) return ;
+    if (!/if\s*\(\s*\w+\s*!==\s*[`"']chatgpt[`"']\s*\)\s*return\s*;/.test(source)) {
       console.log("   [ALREADY_PATCHED] auth guard not found in target chunk");
       alreadyPatched++;
       continue;

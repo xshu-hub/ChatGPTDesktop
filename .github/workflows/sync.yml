@@ -42,11 +42,15 @@ jobs:
           else
             node scripts/check-update.js --json 2>&1
             exit_code=$?
+            # Exit codes: 0 = has update, 1 = no update, 2+ = detection error
             if [ $exit_code -eq 0 ]; then
               echo "has_update=true" >> "$GITHUB_OUTPUT"
-            else
+            elif [ $exit_code -eq 1 ]; then
               echo "has_update=false" >> "$GITHUB_OUTPUT"
               echo "No upstream update detected."
+            else
+              echo "Version check failed with exit code $exit_code"
+              exit $exit_code
             fi
           fi
           set -e

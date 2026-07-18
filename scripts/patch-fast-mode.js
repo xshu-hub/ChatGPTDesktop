@@ -153,10 +153,10 @@ function main() {
 
   if (totalPatched > 0) {
     console.log(`  [ok] ${totalPatched} auth gate(s) removed`);
-    reportPatchStatus("APPLIED", `UI gate: ${totalPatched} removed | Request gate: same isServiceTierAllowed check unblocked`);
+    reportPatchStatus("APPLIED", `${totalPatched} authMethod comparison(s) removed (controls speed selector UI + request service tier via isServiceTierAllowed)`);
   } else {
     console.log("  [ALREADY_PATCHED] fast_mode auth gates already patched or absent");
-    reportPatchStatus("ALREADY_PATCHED", "UI gate: not found | Request gate: isServiceTierAllowed already unblocked");
+    reportPatchStatus("ALREADY_PATCHED", "no authMethod gate found (speed selector + request tier already unrestricted)");
   }
 }
 
