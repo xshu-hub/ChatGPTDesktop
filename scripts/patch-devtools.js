@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { reportPatchStatus,  locateBundles, relPath } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker

@@ -20,7 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { SRC_DIR, relPath } = require("./patch-util");
+const { reportPatchStatus,  SRC_DIR, relPath } = require("./patch-util");
 
 function walk(node, visitor) {
   if (!node || typeof node !== "object") return;

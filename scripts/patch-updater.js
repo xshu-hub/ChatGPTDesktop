@@ -13,7 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
+const { reportPatchStatus,  locateBundles, relPath, SRC_DIR } = require("./patch-util");
 
 const UPDATER_METHODS = new Set([
   "shouldIncludeSparkle",

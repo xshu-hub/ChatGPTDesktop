@@ -107,4 +107,19 @@ function verifyUnchanged(filePath, originalHash) {
   return true;
 }
 
-module.exports = { locateBundles, relPath, SRC_DIR, PROJECT_ROOT, fileHash, verifyUnchanged };
+/**
+ * Unified patch status protocol.
+ * Each patch script MUST output exactly one line matching:
+ *   PATCH_RESULT: STATUS [details]
+ * where STATUS is one of: APPLIED, ALREADY_PATCHED, NOT_APPLICABLE, ABSENT, FAILED
+ */
+const PATCH_STATUSES = ["APPLIED", "ALREADY_PATCHED", "NOT_APPLICABLE", "ABSENT", "FAILED"];
+
+function reportPatchStatus(status, details = "") {
+  if (!PATCH_STATUSES.includes(status)) throw new Error(`Invalid patch status: ${status}`);
+  const line = `PATCH_RESULT: ${status}${details ? " " + details : ""}`;
+  console.log(line);
+  return line;
+}
+
+module.exports = { locateBundles, relPath, SRC_DIR, PROJECT_ROOT, fileHash, verifyUnchanged, PATCH_STATUSES, reportPatchStatus };

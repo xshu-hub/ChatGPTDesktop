@@ -263,37 +263,65 @@ function assembleOutput(resourcesDir, destDir, label) {
     execSync(`npx asar extract "${asarPath}" "${asarDest}"`, { stdio: "pipe" });
   } catch (e) {
     // On Windows, deeply-nested symlinks in node_modules/ can exceed MAX_PATH.
-    // These files are skipped by prepare-src.js anyway (it ignores node_modules/).
-    // Verify ALL errors are only expected ENOENT from node_modules paths.
-    const stderr = e.stderr?.toString() || e.message || "";
-    // @electron/asar errors look like:
-    //   Error: Unable to extract some files:\n\nError: ENOENT: ...\nError: ENOENT: ...
-    const specificErrors = stderr.match(/Error:\s*(.+?)(?:\n|$)/g) || [];
-    // Acceptable: wrapper message "Unable to extract some files" + ENOENT in node_modules
-    const wrapperErrors = specificErrors.filter(l => l.includes("Unable to extract"));
-    const enoentErrors = specificErrors.filter(l => l.includes("ENOENT"));
-    const otherErrors = specificErrors.filter(l => !wrapperErrors.includes(l) && !enoentErrors.includes(l));
-    const nonNodeModules = enoentErrors.filter(l => !l.includes("node_modules"));
+    // These files are not needed (prepare-src.js skips node_modules/).
+    // Policy: tolerate ONLY if ALL errors are ENOENT from within node_modules.
+    // 0 ENOENT, non-node_modules errors, or unparseable output → hard failure.
 
-    if (otherErrors.length > 0 || nonNodeModules.length > 0) {
-      const details = [...otherErrors, ...nonNodeModules].join("\n");
-      throw new Error(`${label}: ASAR extraction had unexpected errors:\n${details}`);
+    const allOutput = [e.stdout, e.stderr, e.message].filter(Boolean).join("\n");
+    const errors = allOutput.match(/Error:\s*[^\n]+/g) || [];
+
+    if (errors.length === 0) {
+      // Can't parse any error details — unknown failure mode
+      throw new Error(`${label}: ASAR extraction failed with unparseable error:\n${allOutput.slice(0, 500)}`);
     }
-    if (enoentErrors.length === 0 && wrapperErrors.length > 0) {
-      // Only wrapper message, no ENOENT details — real failure
-      throw new Error(`${label}: ASAR extraction failed: ${wrapperErrors[0]}`);
+
+    const enoentErrors = errors.filter(l => /ENOENT/i.test(l));
+    const nonEnoentErrors = errors.filter(l => !enoentErrors.includes(l));
+    const enoentInNodeModules = enoentErrors.filter(l => /node_modules/.test(l));
+    const enoentOutside = enoentErrors.filter(l => !enoentInNodeModules.includes(l));
+
+    // Fail on any non-ENOENT error
+    if (nonEnoentErrors.length > 0) {
+      throw new Error(`${label}: ASAR extraction had non-ENOENT errors:\n${nonEnoentErrors.join("\n")}`);
     }
+
+    // Fail on ENOENT outside node_modules
+    if (enoentOutside.length > 0) {
+      throw new Error(`${label}: ASAR extraction had ENOENT outside node_modules:\n${enoentOutside.join("\n")}`);
+    }
+
+    // Fail if 0 ENOENT in node_modules (means we couldn't find any, something else is wrong)
+    if (enoentInNodeModules.length === 0) {
+      throw new Error(`${label}: ASAR extraction failed with 0 ENOENT errors:\n${errors.join("\n")}`);
+    }
+
+    // Tolerated: >=1 ENOENT, all within node_modules
+    // Verify critical FILES (not just directories) exist
+    const asarPkg = path.join(asarDest, "package.json");
+    const mainEntry = (() => {
+      try { const p = JSON.parse(fs.readFileSync(asarPkg, "utf-8")); return path.join(asarDest, p.main || ""); } catch { return null; }
+    })();
+    const webviewIndex = path.join(asarDest, "webview", "index.html");
+    const buildDir = path.join(asarDest, ".vite", "build");
+    const assetsDir = path.join(asarDest, "webview", "assets");
 
     const critical = [
-      path.join(asarDest, "package.json"),
-      path.join(asarDest, ".vite", "build"),
-      path.join(asarDest, "webview", "assets"),
+      { path: asarPkg, label: "package.json" },
+      { path: mainEntry, label: "main entry" },
+      { path: webviewIndex, label: "webview/index.html" },
     ];
-    const missing = critical.filter(p => !fs.existsSync(p));
+    const missing = critical.filter(c => !c.path || !fs.existsSync(c.path));
     if (missing.length > 0) {
-      throw new Error(`${label}: ASAR extraction failed critically — missing: ${missing.map(p => path.relative(asarDest, p)).join(", ")}`);
+      throw new Error(`${label}: ASAR extraction missing critical files: ${missing.map(c => c.label).join(", ")}`);
     }
-    console.warn(`   [warn] ASAR extraction: ${enoentErrors.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
+    // Verify build and assets directories are non-empty
+    for (const d of [{ path: buildDir, label: ".vite/build" }, { path: assetsDir, label: "webview/assets" }]) {
+      if (!fs.existsSync(d.path) || fs.readdirSync(d.path).length === 0) {
+        throw new Error(`${label}: ASAR extraction missing or empty: ${d.label}`);
+      }
+    }
+
+    console.warn(`   [warn] ASAR extraction tolerated ${enoentInNodeModules.length} node_modules ENOENT (MAX_PATH) — ${critical.length + 2} critical paths verified`);
   }
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)

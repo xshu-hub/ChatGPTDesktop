@@ -12,7 +12,7 @@
  */
 const fs = require("fs");
 const acorn = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { reportPatchStatus,  locateBundles, relPath } = require("./patch-util");
 
 const SWITCH_NAME = "force_high_performance_gpu";
 const INJECT_LINE = `require("electron").app.commandLine.appendSwitch("${SWITCH_NAME}");`;

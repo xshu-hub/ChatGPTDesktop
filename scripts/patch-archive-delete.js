@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const acorn = require("acorn");
-const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
+const { reportPatchStatus,  locateBundles, relPath, SRC_DIR } = require("./patch-util");
 
 // ─── Layer 1: app-main route injection ──────────────────────────
 

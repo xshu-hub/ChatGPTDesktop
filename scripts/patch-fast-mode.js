@@ -15,7 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
+const { reportPatchStatus,  locateBundles, relPath, SRC_DIR } = require("./patch-util");
 
 function walk(node, visitor) {
   if (!node || typeof node !== "object") return;
