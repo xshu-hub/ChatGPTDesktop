@@ -268,8 +268,18 @@ function patchExeHash(exePath, oldHash, newHash) {
   const oldBuf = Buffer.from(oldHash, "ascii");
   const idx = buf.indexOf(oldBuf);
   if (idx < 0) {
-    console.log("   [!] old hash not found in exe");
-    return;
+    // Search for any 64-char hex hash near "ElectronAsarIntegrity" to understand the format
+    const integrityIdx = buf.indexOf("ElectronAsarIntegrity");
+    if (integrityIdx >= 0) {
+      const nearby = buf.slice(Math.max(0, integrityIdx - 20), integrityIdx + 200).toString("ascii");
+      throw new Error(`EXE hash patch failed: old hash not found in ${path.basename(exePath)}.\n` +
+        `  Expected: ${oldHash}\n` +
+        `  Near ElectronAsarIntegrity: ...${nearby.slice(0, 100)}...\n` +
+        `  The EXE may have changed format. The produced ZIP will not start.`);
+    }
+    throw new Error(`EXE hash patch failed: old hash not found in ${path.basename(exePath)} and no ElectronAsarIntegrity marker.\n` +
+      `  Expected hash: ${oldHash}\n` +
+      `  The EXE format may have changed. The produced ZIP will not start.`);
   }
   Buffer.from(newHash, "ascii").copy(buf, idx);
   fs.writeFileSync(exePath, buf);

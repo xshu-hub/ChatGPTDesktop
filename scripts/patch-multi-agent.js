@@ -115,9 +115,9 @@ function locateTargets(platform) {
       if (!f.endsWith(".js")) continue;
       const fp = path.join(assetsDir, f);
       const src = fs.readFileSync(fp, "utf-8");
-      // function ZO({authMethod:...}){if(...!==`chatgpt`)return;let n=QO.safeParse...
-      if (src.includes('function ZO({authMethod:e,config:t}){if(e!==`chatgpt`)return;let n=QO.safeParse(t)') ||
-          src.includes('function ZO({authMethod:e,config:t}){let n=QO.safeParse(t)')) {
+      // function ZO({authMethod:X,config:Y}){if(X!==`chatgpt`)return;...}
+      // Variable names differ per platform (minification); use regex.
+      if (/function ZO\(\{authMethod:\w+,config:\w+\}\)\{/.test(src) && src.includes('multi_agent_v2')) {
         targets.push({ platform: plat, path: fp });
       }
     }
@@ -145,7 +145,8 @@ function main() {
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
 
     // Quick check: is the gate already removed?
-    if (source.includes("max_concurrent_threads_per_session") && !source.includes('if(e!==`chatgpt`)return;let n=QO.safeParse')) {
+    // Already patched if the ZO guard is gone but max_concurrent_threads remains
+    if (source.includes("max_concurrent_threads_per_session") && /function ZO\(\{authMethod:\w+,config:\w+\}\)\{let \w=QO\.safeParse/.test(source)) {
       console.log("   [ALREADY_PATCHED] ZO auth gate already removed");
       continue;
     }

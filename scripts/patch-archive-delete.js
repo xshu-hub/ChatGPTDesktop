@@ -81,7 +81,8 @@ function patchDataControls(bundles) {
     }
 
     let newCode = code;
-    for (const m of matches) {
+    // Apply in reverse offset order so earlier indices stay valid
+    for (const m of [...matches].reverse()) {
       console.log(`  * ${relPath(bundle.path)}: showDeleteButton:${m[1]}===${m[2]} -> !0`);
       newCode = newCode.slice(0, m.index) + 'showDeleteButton:!0' + newCode.slice(m.index + m[0].length);
     }

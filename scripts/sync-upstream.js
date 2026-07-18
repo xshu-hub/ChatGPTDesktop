@@ -264,7 +264,16 @@ function assembleOutput(resourcesDir, destDir, label) {
   } catch (e) {
     // On Windows, deeply-nested symlinks in node_modules/ can exceed MAX_PATH.
     // These files are skipped by prepare-src.js anyway (it ignores node_modules/).
-    // Verify critical paths exist; if so, warn but continue.
+    // Verify ALL errors are only expected ENOENT from node_modules paths.
+    const stderr = e.stderr?.toString() || e.message || "";
+    const allErrors = stderr.split("\n").filter(l => l.includes("Error:"));
+    const nodeModulesErrors = allErrors.filter(l => l.includes("ENOENT") && l.includes("node_modules"));
+    const unexpectedErrors = allErrors.filter(l => !nodeModulesErrors.includes(l));
+
+    if (unexpectedErrors.length > 0) {
+      throw new Error(`${label}: ASAR extraction had unexpected errors:\n${unexpectedErrors.join("\n")}`);
+    }
+
     const critical = [
       path.join(asarDest, "package.json"),
       path.join(asarDest, ".vite", "build"),
@@ -274,9 +283,7 @@ function assembleOutput(resourcesDir, destDir, label) {
     if (missing.length > 0) {
       throw new Error(`${label}: ASAR extraction failed critically — missing: ${missing.map(p => path.relative(asarDest, p)).join(", ")}`);
     }
-    const stderr = e.stderr?.toString() || e.message || "";
-    const errLines = stderr.split("\n").filter(l => l.includes("ENOENT")).length;
-    console.warn(`   [warn] ASAR extraction had ${errLines} ENOENT errors (node_modules/ symlinks) — critical files OK, continuing`);
+    console.warn(`   [warn] ASAR extraction: ${nodeModulesErrors.length} ENOENT in node_modules/ (MAX_PATH) — critical files OK, continuing`);
   }
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)
