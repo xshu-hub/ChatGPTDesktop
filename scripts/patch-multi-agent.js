@@ -2,16 +2,20 @@
 /**
  * patch-multi-agent.js — Remove ChatGPT-only gate from multi_agent_v2 config
  *
- * The ZO() function parses config to extract max_concurrent_threads_per_session.
- * It includes an auth gate: if(authMethod !== "chatgpt") return;
+ * The multi_agent_v2 config parser includes an auth gate:
+ *   if(authMethod !== "chatgpt") return;
  * This means API key users get undefined (default: 1 thread), while ChatGPT
  * users get up to 8 concurrent threads per session.
  *
  * This patch removes the early-return guard so ALL auth methods can use
  * multi_agent_v2 with the same max concurrent threads.
  *
- * AST match: find function ZO, locate the IfStatement with early return,
- *            remove the entire if statement.
+ * Strategy (Phase 2 — business-field-based):
+ *   1. Locate the chunk: search for max_concurrent_threads + .safeParse(
+ *   2. AST: find ANY function containing both "chatgpt" comparison AND
+ *           max_concurrent_threads_per_session in its body
+ *   3. Inside that function, find the if(X!==`chatgpt`)return; guard
+ *   4. Remove the guard, verify postcondition
  *
  * Usage:
  *   node scripts/patch-multi-agent.js [platform]    # Apply
@@ -43,56 +47,54 @@ function walk(node, visitor, parent) {
 function getLiteralValue(node) {
   if (!node) return null;
   if (node.type === "Literal") return node.value;
-  if (
-    node.type === "TemplateLiteral" &&
-    node.expressions.length === 0 &&
-    node.quasis.length === 1
-  )
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0 && node.quasis.length === 1)
     return node.quasis[0].value.cooked;
   return null;
 }
 
-// ── Patch rule ──
+// ── Patch rule (Phase 2: business-field-based, no hardcoded function name) ──
+
+const BUSINESS_FIELDS = ["multi_agent_v2", "max_concurrent_threads_per_session"];
 
 function collectPatches(ast, source) {
   const patches = [];
 
   walk(ast, (node) => {
-    // Find FunctionDeclaration named ZO
-    if (node.type !== "FunctionDeclaration") return;
-    if (node.id?.name !== "ZO") return;
+    // Match ANY function (declaration, expression, arrow) whose body contains
+    // the business field "max_concurrent_threads_per_session".
+    const isFn = node.type === "FunctionDeclaration" ||
+                 node.type === "FunctionExpression" ||
+                 node.type === "ArrowFunctionExpression";
+    if (!isFn) return;
 
-    // Find the early-return if-statement: if(e!==`chatgpt`)return;
-    const body = node.body;
-    if (!body || body.type !== "BlockStatement") return;
+    const fnSrc = source.slice(node.start, node.end);
+    if (!fnSrc.includes("max_concurrent_threads_per_session")) return;
 
-    for (const stmt of body.body) {
-      if (stmt.type !== "IfStatement") continue;
-      if (stmt.alternate) continue; // Must be a bare if with no else
+    // Inside this function, find the auth guard: if(X!==`chatgpt`)return;
+    walk(node, (child) => {
+      if (child.type !== "IfStatement") return;
+      if (child.alternate) return; // No else clause
 
-      const test = stmt.test;
+      const test = child.test;
       if (test.type !== "BinaryExpression" || test.operator !== "!==") return;
-      if (getLiteralValue(test.right) !== "chatgpt" && getLiteralValue(test.left) !== "chatgpt") continue;
+      const leftVal = getLiteralValue(test.left);
+      const rightVal = getLiteralValue(test.right);
+      if (leftVal !== "chatgpt" && rightVal !== "chatgpt") return;
 
-      // Check consequent is a ReturnStatement with no argument
-      const cons = stmt.consequent;
-      if (cons.type !== "ReturnStatement") continue;
-      if (cons.argument) continue; // Must be bare return; not return <expr>
-
-      // Also check the function body (the if statement's parent) to confirm
-      // this is inside ZO function
-      const funcSrc = source.slice(node.start, node.end);
-      if (!funcSrc.includes("multi_agent_v2") && !funcSrc.includes("max_concurrent_threads")) continue;
+      // Consequent must be a bare ReturnStatement (no argument)
+      const cons = child.consequent;
+      if (cons.type !== "ReturnStatement") return;
+      if (cons.argument) return; // Must be bare `return;`
 
       patches.push({
         id: "multi_agent_v2_auth_gate",
-        start: stmt.start,
-        end: stmt.end,
-        // Replace with empty string (remove the guard entirely)
+        start: child.start,
+        end: child.end,
         replacement: "",
-        original: source.slice(stmt.start, stmt.end),
+        original: source.slice(child.start, child.end),
+        fnName: node.id?.name || "(anonymous)",
       });
-    }
+    });
   });
 
   return patches;
@@ -115,15 +117,30 @@ function locateTargets(platform) {
       if (!f.endsWith(".js")) continue;
       const fp = path.join(assetsDir, f);
       const src = fs.readFileSync(fp, "utf-8");
-      // ZO function: X.safeParse(t).data.features.multi_agent_v2.max_concurrent_threads_per_session
-      // The schema variable name (QO, $O, etc.) differs per platform due to minification.
-      // "max_concurrent_threads_per_session" and ".safeParse(t)" are both unique to this function.
-      if (src.includes('max_concurrent_threads_per_session') && /\.safeParse\(/.test(src)) {
+      // Business field search: max_concurrent_threads_per_session + .safeParse(
+      // These are unique to the multi_agent_v2 config parser function.
+      if (BUSINESS_FIELDS.every(field => src.includes(field)) && /\.safeParse\(/.test(src)) {
         targets.push({ platform: plat, path: fp });
       }
     }
   }
   return targets;
+}
+
+// ── Postcondition verification ──
+
+function verifyPostcondition(original, modified) {
+  // Business fields must be preserved
+  for (const field of BUSINESS_FIELDS) {
+    if (!modified.includes(field)) return { ok: false, reason: `missing business field: ${field}` };
+  }
+  // Auth guard should be gone
+  if (/if\(\w+!==`chatgpt`\)return;/.test(modified)) {
+    return { ok: false, reason: "auth guard still present after patch" };
+  }
+  // At least one change was made
+  if (original === modified) return { ok: false, reason: "no changes made" };
+  return { ok: true };
 }
 
 // ── Main ──
@@ -136,21 +153,23 @@ function main() {
   const targets = locateTargets(platform);
 
   if (targets.length === 0) {
-    console.log("[ABSENT] No chunk contains multi_agent_v2 + ZO function");
+    reportPatchStatus("ABSENT", "no chunk contains max_concurrent_threads_per_session + .safeParse(");
     return;
   }
+
+  let totalApplied = 0;
+  let alreadyPatched = 0;
+  let absentCount = 0;
 
   for (const bundle of targets) {
     console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
     console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
 
-    // Quick check: does the guard still exist?
-    // Pattern: if(X!==`chatgpt`)return; (the auth gate inside ZO)
-    // Guard pattern: if(X!==`chatgpt`)return; anywhere in the file
-    if (!/if\(\w+!==`chatgpt`\)return;/.test(source) &&
-        source.includes('max_concurrent_threads_per_session')) {
-      console.log("   [ALREADY_PATCHED] ZO auth gate already removed");
+    // Quick pre-check: does the guard pattern exist?
+    if (!/if\(\w+!==`chatgpt`\)return;/.test(source)) {
+      console.log("   [ALREADY_PATCHED] auth guard not found in target chunk");
+      alreadyPatched++;
       continue;
     }
 
@@ -161,31 +180,48 @@ function main() {
     const patches = collectPatches(ast, source);
 
     if (patches.length === 0) {
-      console.log("   [ABSENT] ZO function found but guard pattern did not match");
+      console.log("   [ABSENT] target function found but guard pattern did not AST-match");
+      absentCount++;
       continue;
     }
 
     if (isCheck) {
-      console.log(`   [PATCHABLE] ${patches.length} match(es):`);
+      console.log(`   [PATCHABLE] ${patches.length} guard(s):`);
       for (const p of patches) {
-        console.log(`     > offset ${p.start}: remove \`${p.original}\``);
+        console.log(`     > fn=${p.fnName} offset ${p.start}: remove \`${p.original}\``);
       }
+      totalApplied += patches.length;
       continue;
     }
 
+    // Apply patches (reverse order)
     patches.sort((a, b) => b.start - a.start);
-
     let code = source;
     for (const p of patches) {
-      console.log(`   * offset ${p.start}: removing auth gate \`${p.original}\``);
-      // Remove the guard: delete from start to end (including trailing whitespace/semicolons)
+      console.log(`   * fn=${p.fnName} offset ${p.start}: removing \`${p.original}\``);
       let end = p.end;
       while (end < code.length && (code[end] === " " || code[end] === ";" || code[end] === "\n")) end++;
       code = code.slice(0, p.start) + code.slice(end);
     }
 
+    // Postcondition verification
+    const verified = verifyPostcondition(source, code);
+    if (!verified.ok) {
+      reportPatchStatus("FAILED", `postcondition: ${verified.reason}`);
+      return;
+    }
+
     fs.writeFileSync(bundle.path, code, "utf-8");
-    console.log(`   [ok] ZO multi_agent_v2 auth gate removed: ${patches.length} guard(s)`);
+    console.log(`   [ok] ${patches.length} guard(s) removed, postcondition verified`);
+    totalApplied += patches.length;
+  }
+
+  if (alreadyPatched > 0 && totalApplied === 0 && absentCount === 0) {
+    reportPatchStatus("ALREADY_PATCHED", `${alreadyPatched} chunk(s) already in desired state`);
+  } else if (totalApplied > 0) {
+    reportPatchStatus("APPLIED", `${totalApplied} guard(s) removed`);
+  } else if (absentCount > 0 && totalApplied === 0) {
+    reportPatchStatus("ABSENT", `${absentCount} chunk(s) had target fields but no guard matched`);
   }
 }
 

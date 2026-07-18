@@ -81,15 +81,20 @@ function main() {
 
       // Parse PATCH_RESULT line
       const statusLine = output.split("\n").find(l => l.startsWith("PATCH_RESULT:"));
+      let status, detail;
       if (statusLine) {
         const parts = statusLine.slice("PATCH_RESULT:".length).trim().split(/\s+/);
-        const status = parts[0];
-        const detail = parts.slice(1).join(" ");
-        results.push({ script: label, status, detail });
+        status = parts[0];
+        detail = parts.slice(1).join(" ");
       } else {
         // Smart inference from output patterns
         const inferred = inferStatus(output);
-        results.push({ script: label, status: inferred.status, detail: inferred.detail });
+        status = inferred.status;
+        detail = inferred.detail;
+      }
+      results.push({ script: label, status, detail });
+      if ((status === "ABSENT" || status === "FAILED") && REQUIRED.has(script)) {
+        errors.push(`${label}: ${status} (REQUIRED) — ${detail}`);
       }
     } catch (e) {
       // Child process failed (non-zero exit)
