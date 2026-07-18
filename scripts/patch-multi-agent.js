@@ -71,7 +71,14 @@ function collectPatches(ast, source) {
     if (!fnSrc.includes("max_concurrent_threads_per_session")) return;
 
     // Inside this function, find the auth guard: if(X!==`chatgpt`)return;
-    walk(node, (child) => {
+    // Do NOT traverse into nested functions (lexical scope boundary).
+    walk(node, (child, parent) => {
+      // Stop at nested function boundaries
+      if (child.type === "FunctionDeclaration" ||
+          child.type === "FunctionExpression" ||
+          child.type === "ArrowFunctionExpression") {
+        if (child !== node) return; // Skip nested functions
+      }
       if (child.type !== "IfStatement") return;
       if (child.alternate) return; // No else clause
 
@@ -157,73 +164,76 @@ function main() {
     return;
   }
 
-  let totalApplied = 0;
-  let alreadyPatched = 0;
-  let absentCount = 0;
-
-  for (const bundle of targets) {
-    console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
-    const source = fs.readFileSync(bundle.path, "utf-8");
-    console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
-
-    // Quick pre-check: search for any authMethod !== "chatgpt" guard followed by bare return
-    // Accepts: if(X!==`chatgpt`)return;  if(X!=="chatgpt")return;  if( X !== `chatgpt` ) return ;
-    if (!/if\s*\(\s*\w+\s*!==\s*[`"']chatgpt[`"']\s*\)\s*return\s*;/.test(source)) {
-      console.log("   [ALREADY_PATCHED] auth guard not found in target chunk");
-      alreadyPatched++;
-      continue;
-    }
-
-    const t0 = Date.now();
-    const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
-    console.log(`   parse: ${Date.now() - t0}ms`);
-
-    const patches = collectPatches(ast, source);
-
-    if (patches.length === 0) {
-      console.log("   [ABSENT] target function found but guard pattern did not AST-match");
-      absentCount++;
-      continue;
-    }
-
-    if (isCheck) {
-      console.log(`   [PATCHABLE] ${patches.length} guard(s):`);
-      for (const p of patches) {
-        console.log(`     > fn=${p.fnName} offset ${p.start}: remove \`${p.original}\``);
-      }
-      totalApplied += patches.length;
-      continue;
-    }
-
-    // Apply patches (reverse order)
-    patches.sort((a, b) => b.start - a.start);
-    let code = source;
-    for (const p of patches) {
-      console.log(`   * fn=${p.fnName} offset ${p.start}: removing \`${p.original}\``);
-      let end = p.end;
-      while (end < code.length && (code[end] === " " || code[end] === ";" || code[end] === "\n")) end++;
-      code = code.slice(0, p.start) + code.slice(end);
-    }
-
-    // Postcondition verification
-    const verified = verifyPostcondition(source, code);
-    if (!verified.ok) {
-      reportPatchStatus("FAILED", `postcondition: ${verified.reason}`);
-      return;
-    }
-
-    fs.writeFileSync(bundle.path, code, "utf-8");
-    console.log(`   [ok] ${patches.length} guard(s) removed, postcondition verified`);
-    totalApplied += patches.length;
+  // One candidate per platform, one guard per candidate
+  if (targets.length === 0) {
+    reportPatchStatus("ABSENT", "no chunk contains business fields + .safeParse(");
+    return;
+  }
+  if (targets.length > 1) {
+    reportPatchStatus("FAILED", `expected 1 candidate chunk, found ${targets.length}: ${targets.map(t => relPath(t.path)).join(", ")}`);
+    return;
   }
 
-  if (alreadyPatched > 0 && totalApplied === 0 && absentCount === 0) {
-    reportPatchStatus("ALREADY_PATCHED", `${alreadyPatched} chunk(s) already in desired state`);
-  } else if (totalApplied > 0) {
-    reportPatchStatus("APPLIED", `${totalApplied} guard(s) removed`);
-  } else if (absentCount > 0 && totalApplied === 0) {
-    reportPatchStatus("ABSENT", `${absentCount} chunk(s) had target fields but no guard matched`);
+  const bundle = targets[0];
+  console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
+  const source = fs.readFileSync(bundle.path, "utf-8");
+  console.log(`   size: ${(source.length / 1024 / 1024).toFixed(1)} MB`);
+
+  // Quick pre-check: does the guard pattern exist?
+  if (!/if\s*\(\s*\w+\s*!==\s*[`"']chatgpt[`"']\s*\)\s*return\s*;/.test(source)) {
+    // Verify business fields still present (ALREADY_PATCHED) vs truly ABSENT
+    if (BUSINESS_FIELDS.every(f => source.includes(f))) {
+      console.log("   [ALREADY_PATCHED] auth guard not found, business fields present");
+      reportPatchStatus("ALREADY_PATCHED", "guard already removed, business fields intact");
+    } else {
+      console.log("   [ABSENT] auth guard not found and business fields missing");
+      reportPatchStatus("ABSENT", "neither guard nor business fields found");
+    }
+    return;
   }
+
+  const t0 = Date.now();
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  console.log(`   parse: ${Date.now() - t0}ms`);
+
+  const patches = collectPatches(ast, source);
+
+  if (patches.length === 0) {
+    console.log("   [ABSENT] target chunk found but guard did not AST-match (lexical scope or pattern change)");
+    reportPatchStatus("ABSENT", "guard regex matched but AST did not (lexical scope boundary?)");
+    return;
+  }
+
+  if (patches.length > 1) {
+    console.log(`   [FAILED] expected 1 guard, found ${patches.length}`);
+    reportPatchStatus("FAILED", `expected 1 guard, found ${patches.length}`);
+    return;
+  }
+
+  const p = patches[0];
+
+  if (isCheck) {
+    console.log(`   [PATCHABLE] fn=${p.fnName} offset ${p.start}: remove \`${p.original}\``);
+    reportPatchStatus("APPLIED", "1 guard patchable");
+    return;
+  }
+
+  // Apply patch
+  let code = source;
+  let end = p.end;
+  while (end < code.length && (code[end] === " " || code[end] === ";" || code[end] === "\n")) end++;
+  code = code.slice(0, p.start) + code.slice(end);
+
+  // Postcondition verification
+  const verified = verifyPostcondition(source, code);
+  if (!verified.ok) {
+    reportPatchStatus("FAILED", `postcondition: ${verified.reason}`);
+    return;
+  }
+
+  fs.writeFileSync(bundle.path, code, "utf-8");
+  console.log(`   [ok] guard removed, postcondition verified`);
+  reportPatchStatus("APPLIED", `1 guard removed from ${p.fnName}`);
 }
 
 main();
