@@ -28,6 +28,7 @@ const REQUIRED = new Set([
   "patch-i18n.js",
   "patch-devtools.js",
   "patch-fast-mode.js",
+  "patch-ultra-fast.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
@@ -45,6 +46,7 @@ const PATCHES = [
   "patch-copyright.js",
   "patch-devtools.js",
   "patch-fast-mode.js",
+  "patch-ultra-fast.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
@@ -57,6 +59,7 @@ const PATCHES = [
 // All others go through _patch-shim.js for PATCH_RESULT generation.
 const NATIVE_PATCHES = new Set([
   "patch-fast-mode.js",
+  "patch-ultra-fast.js",
   "patch-gpu.js",
   "patch-multi-agent.js",
 ]);
