@@ -225,9 +225,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Validate release artifacts
-        run: node scripts/validate-release-artifacts.js artifacts
-
       - name: Get upstream version and tag
         if: ${{ !inputs.dry_run }}
         id: version
@@ -265,6 +262,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Validate release artifacts
+        run: node scripts/validate-release-artifacts.js artifacts
 
       - name: Display structure
         run: ls -lhR artifacts/
