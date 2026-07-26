@@ -29,6 +29,7 @@ const REQUIRED = new Set([
   "patch-devtools.js",
   "patch-fast-mode.js",
   "patch-ultra-fast.js",
+  "patch-all-gates.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
@@ -47,6 +48,7 @@ const PATCHES = [
   "patch-devtools.js",
   "patch-fast-mode.js",
   "patch-ultra-fast.js",
+  "patch-all-gates.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
@@ -60,6 +62,7 @@ const PATCHES = [
 const NATIVE_PATCHES = new Set([
   "patch-fast-mode.js",
   "patch-ultra-fast.js",
+  "patch-all-gates.js",
   "patch-gpu.js",
   "patch-multi-agent.js",
 ]);
